@@ -26,16 +26,18 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <Navbar />
-            <Routes>
-              <Route path="/" element={<Landing />} />
-              <Route path="/schemes" element={<SchemeExplorer />} />
-              <Route path="/schemes/:schemeId" element={<SchemeDetails />} />
-              <Route path="/compare" element={<SchemeCompare />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/chat" element={<AIChat />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <div className="pb-20 md:pb-0">
+              <Routes>
+                <Route path="/" element={<Landing />} />
+                <Route path="/schemes" element={<SchemeExplorer />} />
+                <Route path="/schemes/:schemeId" element={<SchemeDetails />} />
+                <Route path="/compare" element={<SchemeCompare />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/chat" element={<AIChat />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </div>
           </BrowserRouter>
         </TooltipProvider>
       </LanguageProvider>
