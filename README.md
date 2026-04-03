@@ -1,3 +1,3 @@
-# Welcome to your Lovable project
+# Samarth Shayak
 
-TODO: Document your project here
+AI assistant for farmers with scheme discovery, chat, document tools, and crop support.

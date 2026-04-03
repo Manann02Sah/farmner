@@ -14,7 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { supabase } from "@/integrations/supabase/client";
 import { invokeJsonEdgeFunction } from "@/lib/edgeFunctions";
-import { translatePdfLocally } from "@/lib/localPdfTranslator";
+import { translateImageLocally, translatePdfLocally } from "@/lib/localPdfTranslator";
 
 const CONVERT_DOCUMENT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/convert-document`;
 const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -99,6 +99,10 @@ const DocumentConverter = () => {
           "\u0938\u0930\u094d\u0935\u0930 \u0905\u0928\u0941\u0935\u093e\u0926 \u0905\u0938\u092b\u0932 \u0930\u0939\u093e, \u0905\u092c \u0932\u094b\u0915\u0932 PDF \u092e\u0949\u0921\u0932 \u0938\u0947 \u0915\u0928\u094d\u0935\u0930\u094d\u091f \u0915\u0930 \u0930\u0939\u0947 \u0939\u0948\u0902...",
         localFallbackDone:
           "\u0932\u094b\u0915\u0932 PDF \u092e\u0949\u0921\u0932 \u0938\u0947 \u0905\u0928\u0941\u0935\u093e\u0926 \u092a\u0942\u0930\u093e \u0939\u094b \u0917\u092f\u093e\u0964",
+        localImageFallback:
+          "\u0938\u0930\u094d\u0935\u0930 image OCR \u0905\u0938\u092b\u0932 \u0930\u0939\u093e, \u0905\u092c \u0932\u094b\u0915\u0932 image OCR \u0938\u0947 \u0915\u0928\u094d\u0935\u0930\u094d\u091f \u0915\u0930 \u0930\u0939\u0947 \u0939\u0948\u0902...",
+        localImageFallbackDone:
+          "\u0932\u094b\u0915\u0932 image OCR \u0938\u0947 \u0905\u0928\u0941\u0935\u093e\u0926 \u092a\u0942\u0930\u093e \u0939\u094b \u0917\u092f\u093e\u0964",
         fallbackWarning:
           "\u0938\u094d\u0915\u0948\u0928 PDF \u0915\u0947 \u0932\u093f\u090f \u0938\u0930\u094d\u0935\u0930 OCR \u0906\u092e \u0924\u094c\u0930 \u092a\u0930 \u092c\u0947\u0939\u0924\u0930 \u0939\u0948\u0964",
       };
@@ -135,6 +139,8 @@ const DocumentConverter = () => {
       noText: "The document conversion service did not return translated text.",
       localFallback: "Server translation failed. Switching to local PDF translator model...",
       localFallbackDone: "Local PDF translation completed.",
+      localImageFallback: "Server image OCR failed. Switching to local image OCR...",
+      localImageFallbackDone: "Local image OCR translation completed.",
       fallbackWarning: "For scanned PDFs, server OCR usually gives better results.",
     };
   }, [language, selectedFile]);
@@ -195,7 +201,57 @@ const DocumentConverter = () => {
     setIsConverting(true);
     resetResult();
 
+    const isPdf =
+      selectedFile.type === "application/pdf" ||
+      selectedFile.name.toLowerCase().endsWith(".pdf");
+    const isImage = selectedFile.type.startsWith("image/");
+
+    const applyResult = (data: ConversionResult, pdfBlob: Blob | null = null) => {
+      if (typeof data.translatedText !== "string" || !data.translatedText.trim()) {
+        throw new Error(copy.noText);
+      }
+
+      setResult({
+        translatedText: data.translatedText,
+        originalText: data.originalText,
+        detectedSourceLanguage: data.detectedSourceLanguage,
+        warnings: Array.isArray(data.warnings) ? data.warnings : [],
+        ocrPerformed: data.ocrPerformed,
+      });
+      setTranslatedPdfBlob(pdfBlob);
+    };
+
     try {
+      if (isPdf) {
+        try {
+          const localResult = await translatePdfLocally(selectedFile, {
+            sourceLanguage: directionCopy.sourceLanguage,
+            targetLanguage: directionCopy.targetLanguage,
+            onProgress: (_stage, progress, message) => {
+              setLocalProgress(progress);
+              setLocalStatus(message);
+            },
+          });
+
+          applyResult(
+            {
+              translatedText: localResult.translatedText,
+              originalText: localResult.originalText,
+              detectedSourceLanguage: localResult.detectedSourceLanguage,
+              warnings: localResult.warnings,
+              ocrPerformed: true,
+            },
+            localResult.translatedPdfBlob,
+          );
+          toast.error(copy.localFallbackDone);
+          return;
+        } catch (localPdfError) {
+          console.warn("Local PDF translation failed, retrying server OCR path", localPdfError);
+          setLocalProgress(0);
+          setLocalStatus("");
+        }
+      }
+
       const fileBase64 = await readFileAsBase64(selectedFile);
       const data = await invokeJsonEdgeFunction<ConversionResult>(
         "convert-document",
@@ -211,24 +267,10 @@ const DocumentConverter = () => {
         copy.failed,
       );
 
-      if (typeof data.translatedText !== "string" || !data.translatedText.trim()) {
-        throw new Error(copy.noText);
-      }
-
-      setResult({
-        translatedText: data.translatedText,
-        originalText: data.originalText,
-        detectedSourceLanguage: data.detectedSourceLanguage,
-        warnings: Array.isArray(data.warnings) ? data.warnings : [],
-        ocrPerformed: data.ocrPerformed,
-      });
+      applyResult(data);
       return;
     } catch (serverError) {
-      const isPdf =
-        selectedFile.type === "application/pdf" ||
-        selectedFile.name.toLowerCase().endsWith(".pdf");
-
-      if (!isPdf) {
+      if (!isPdf && !isImage) {
         toast.error(
           serverError instanceof Error && serverError.message.trim()
             ? serverError.message
@@ -239,8 +281,33 @@ const DocumentConverter = () => {
       }
 
       try {
-        toast.error(copy.localFallback);
-        const localResult = await translatePdfLocally(selectedFile, {
+        if (isPdf) {
+          toast.error(copy.localFallback);
+          const localResult = await translatePdfLocally(selectedFile, {
+            sourceLanguage: directionCopy.sourceLanguage,
+            targetLanguage: directionCopy.targetLanguage,
+            onProgress: (_stage, progress, message) => {
+              setLocalProgress(progress);
+              setLocalStatus(message);
+            },
+          });
+
+          applyResult(
+            {
+              translatedText: localResult.translatedText,
+              originalText: localResult.originalText,
+              detectedSourceLanguage: localResult.detectedSourceLanguage,
+              warnings: localResult.warnings,
+              ocrPerformed: true,
+            },
+            localResult.translatedPdfBlob,
+          );
+          toast.error(copy.localFallbackDone);
+          return;
+        }
+
+        toast.error(copy.localImageFallback);
+        const localImageResult = await translateImageLocally(selectedFile, {
           sourceLanguage: directionCopy.sourceLanguage,
           targetLanguage: directionCopy.targetLanguage,
           onProgress: (_stage, progress, message) => {
@@ -249,15 +316,17 @@ const DocumentConverter = () => {
           },
         });
 
-        setResult({
-          translatedText: localResult.translatedText,
-          originalText: localResult.originalText,
-          detectedSourceLanguage: localResult.detectedSourceLanguage,
-          warnings: localResult.warnings,
-          ocrPerformed: true,
-        });
-        setTranslatedPdfBlob(localResult.translatedPdfBlob);
-        toast.error(copy.localFallbackDone);
+        applyResult(
+          {
+            translatedText: localImageResult.translatedText,
+            originalText: localImageResult.originalText,
+            detectedSourceLanguage: localImageResult.detectedSourceLanguage,
+            warnings: localImageResult.warnings,
+            ocrPerformed: true,
+          },
+          null,
+        );
+        toast.error(copy.localImageFallbackDone);
       } catch (localError) {
         toast.error(
           localError instanceof Error && localError.message.trim()

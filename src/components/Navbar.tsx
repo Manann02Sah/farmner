@@ -25,8 +25,15 @@ const Navbar = () => {
     <>
       <nav className="fixed top-0 w-full z-50 glass-panel h-20 flex justify-between items-center px-4 md:px-8">
         <div className="flex items-center gap-4 md:gap-8 min-w-0">
-          <Link to="/" className="text-xl md:text-2xl font-extrabold text-primary tracking-tighter font-headline truncate">
-            Samarth Sahayak
+          <Link to="/" className="flex items-center gap-3 min-w-0">
+            <img
+              src="/brand/samarth-shayak-mark.svg"
+              alt="Samarth Shayak"
+              className="h-11 w-11 rounded-xl object-contain shrink-0"
+            />
+            <span className="text-xl md:text-2xl font-extrabold text-primary tracking-tighter font-headline truncate">
+              Samarth Shayak
+            </span>
           </Link>
           <div className="hidden md:flex gap-6 items-center">
             {navLinks.map((link) => (

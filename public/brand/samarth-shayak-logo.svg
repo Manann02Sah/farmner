@@ -1,0 +1,46 @@
+<svg width="960" height="320" viewBox="0 0 960 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="960" height="320" rx="32" fill="#F8FAF5"/>
+  <g transform="translate(48 36)">
+    <circle cx="124" cy="124" r="108" fill="url(#leafBg)"/>
+    <path d="M51 188C72 136 117 102 174 90C159 121 153 158 155 209C116 215 82 208 51 188Z" fill="#EFF9E5"/>
+    <path d="M190 56C217 61 238 72 254 90" stroke="#6FA21A" stroke-width="14" stroke-linecap="round"/>
+    <path d="M199 84C223 88 242 97 256 111" stroke="#6FA21A" stroke-width="14" stroke-linecap="round"/>
+    <path d="M206 112C227 116 244 124 255 135" stroke="#6FA21A" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="189" cy="146" r="10" fill="#1F7A28"/>
+    <path d="M67 82V146H112" stroke="#1F7A28" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M67 104L44 86" stroke="#1F7A28" stroke-width="8" stroke-linecap="round"/>
+    <path d="M67 126L40 126" stroke="#1F7A28" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="43" cy="84" r="10" fill="#FDBA31" stroke="#1F7A28" stroke-width="6"/>
+    <circle cx="39" cy="126" r="10" fill="#FDF4D8" stroke="#1F7A28" stroke-width="6"/>
+    <circle cx="67" cy="60" r="10" fill="#FDE7BF" stroke="#1F7A28" stroke-width="6"/>
+    <circle cx="112" cy="146" r="10" fill="#F8FAF5" stroke="#1F7A28" stroke-width="6"/>
+    <path d="M118 140C118 104 145 75 180 72C165 114 157 157 158 212C133 200 118 174 118 140Z" fill="#7FAE1D"/>
+    <path d="M74 182C92 141 129 112 176 100C145 130 125 166 116 209C100 204 87 196 74 182Z" fill="#3F8F1F"/>
+    <path d="M122 210C136 165 166 131 208 111C176 147 159 182 157 228C144 226 133 220 122 210Z" fill="#B8D52A"/>
+    <path d="M150 220C164 178 196 141 242 118C215 156 199 196 194 246C175 241 160 233 150 220Z" fill="#1F7A28"/>
+    <path d="M166 191C182 153 212 124 252 108C230 141 218 180 216 226C194 216 178 205 166 191Z" fill="#E8F4CF"/>
+    <path d="M118 174C112 130 127 95 160 72C150 127 152 179 166 230C136 215 121 198 118 174Z" fill="#9DCB28"/>
+    <path d="M118 174C147 166 176 165 207 170C181 178 160 195 144 222C132 209 123 193 118 174Z" fill="#F7FAF0"/>
+    <path d="M186 204C194 177 214 154 245 134C228 161 220 193 219 229C205 223 193 215 186 204Z" fill="#F8FAF5"/>
+    <path d="M150 65C150 40 170 19 195 19C219 19 239 40 239 65V81H150V65Z" fill="#F8C742" stroke="#8A5A12" stroke-width="6"/>
+    <path d="M132 80C132 65 144 53 159 53H230C245 53 257 65 257 80C257 95 245 107 230 107H159C144 107 132 95 132 80Z" fill="#FDBA31" stroke="#8A5A12" stroke-width="6"/>
+    <path d="M146 77C168 67 193 62 221 65" stroke="#F6E27A" stroke-width="5" stroke-linecap="round"/>
+    <path d="M148 92C176 82 204 80 230 85" stroke="#ECA81C" stroke-width="4" stroke-linecap="round"/>
+    <rect x="152" y="91" width="86" height="84" rx="40" fill="#DFF0FF" stroke="#103E63" stroke-width="8"/>
+    <rect x="167" y="105" width="56" height="29" rx="14.5" fill="#103E63"/>
+    <circle cx="181" cy="119" r="7" fill="#F8FAF5"/>
+    <circle cx="209" cy="119" r="7" fill="#F8FAF5"/>
+    <path d="M183 141H207C207 149 201 155 195 155C189 155 183 149 183 141Z" fill="#103E63"/>
+    <rect x="143" y="101" width="12" height="48" rx="6" fill="#2D9B3B"/>
+    <rect x="235" y="101" width="12" height="48" rx="6" fill="#2D9B3B"/>
+    <path d="M188 175H202V192C202 198 197 203 191 203C185 203 180 198 180 192V183C180 179 183 175 188 175Z" fill="#2D9B3B" stroke="#1F7A28" stroke-width="5"/>
+  </g>
+  <text x="320" y="156" fill="#28751D" font-size="72" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Samarth Shayak</text>
+  <text x="320" y="214" fill="#6B7280" font-size="38" font-family="Segoe UI, Arial, sans-serif" font-weight="500">AI Assistant for Farmers</text>
+  <defs>
+    <linearGradient id="leafBg" x1="16" y1="16" x2="232" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A8DB2F"/>
+      <stop offset="1" stop-color="#1C7B23"/>
+    </linearGradient>
+  </defs>
+</svg>
