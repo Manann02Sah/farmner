@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { getLocalSchemeCatalog } from "@/lib/localSchemeCatalog";
 import { useQuery } from "@tanstack/react-query";
 
 export interface SchemeRow {
@@ -17,6 +18,30 @@ export interface SchemeRow {
   application_deadline: string | null;
   website_url: string | null;
   created_at: string;
+}
+
+const MINIMUM_SCHEME_CATALOG_SIZE = 200;
+
+function mergeWithFallbackSchemes(remoteSchemes: SchemeRow[]) {
+  if (remoteSchemes.length >= MINIMUM_SCHEME_CATALOG_SIZE) {
+    return remoteSchemes;
+  }
+
+  const merged = new Map<string, SchemeRow>();
+
+  for (const scheme of remoteSchemes) {
+    const key = scheme.external_id ?? scheme.id;
+    merged.set(key, scheme);
+  }
+
+  for (const scheme of getLocalSchemeCatalog()) {
+    const key = scheme.external_id ?? scheme.id;
+    if (!merged.has(key)) {
+      merged.set(key, scheme);
+    }
+  }
+
+  return [...merged.values()].sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function useSchemes(filters?: {
@@ -49,7 +74,7 @@ export function useSchemes(filters?: {
 
       const { data, error } = await query;
       if (error) throw error;
-      return data as SchemeRow[];
+      return mergeWithFallbackSchemes((data as SchemeRow[]) ?? []);
     },
   });
 }
@@ -60,10 +85,11 @@ export function useSchemeCategories() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("schemes")
-        .select("category")
+        .select("*")
         .eq("status", "active");
       if (error) throw error;
-      const cats = [...new Set(data.map((d: { category: string }) => d.category))].sort();
+      const merged = mergeWithFallbackSchemes((data as SchemeRow[]) ?? []);
+      const cats = [...new Set(merged.map((scheme) => scheme.category))].sort();
       return cats;
     },
   });
@@ -75,10 +101,11 @@ export function useSchemeStates() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("schemes")
-        .select("state")
+        .select("*")
         .eq("status", "active");
       if (error) throw error;
-      const states = [...new Set(data.map((d: { state: string }) => d.state))].sort();
+      const merged = mergeWithFallbackSchemes((data as SchemeRow[]) ?? []);
+      const states = [...new Set(merged.map((scheme) => scheme.state))].sort();
       return states;
     },
   });

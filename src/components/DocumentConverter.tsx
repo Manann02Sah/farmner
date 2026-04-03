@@ -14,7 +14,7 @@ import { Progress } from "@/components/ui/progress";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { supabase } from "@/integrations/supabase/client";
 import { invokeJsonEdgeFunction } from "@/lib/edgeFunctions";
-import { translatePdfLocally } from "@/lib/localPdfTranslator";
+import { translateImageLocally, translatePdfLocally } from "@/lib/localPdfTranslator";
 
 const CONVERT_DOCUMENT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/convert-document`;
 const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;

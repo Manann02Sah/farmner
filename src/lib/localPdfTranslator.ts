@@ -12,7 +12,7 @@ type LocalTranslationOptions = {
 type LocalTranslationResult = {
   originalText: string;
   translatedText: string;
-  translatedPdfBlob: Blob;
+  translatedPdfBlob: Blob | null;
   detectedSourceLanguage: string;
   warnings: string[];
 };
@@ -20,12 +20,15 @@ type LocalTranslationResult = {
 let cachedDevanagariFontBase64: string | null = null;
 let pdfJsPromise: Promise<any> | null = null;
 let jsPdfPromise: Promise<any> | null = null;
+let tesseractPromise: Promise<any> | null = null;
 
 const getPdfJs = async () => {
   if (!pdfJsPromise) {
     pdfJsPromise = import("pdfjs-dist").then((module) => {
-      module.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      module.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/build/pdf.worker.min.mjs",
+        import.meta.url,
+      ).toString();
       return module;
     });
   }
@@ -39,6 +42,14 @@ const getJsPdf = async () => {
   }
 
   return jsPdfPromise;
+};
+
+const getTesseract = async () => {
+  if (!tesseractPromise) {
+    tesseractPromise = import("tesseract.js");
+  }
+
+  return tesseractPromise;
 };
 
 const toLanguageName = (language: LanguageCode) => (language === "hi" ? "Hindi" : "English");
@@ -254,10 +265,21 @@ export async function translatePdfLocally(
   }
 
   emitProgress(options, "generating", 90, "Generating translated PDF...");
-  const translatedPdfBlob = await generateTranslatedPdf(
-    translatedPages,
-    options.targetLanguage,
-  );
+  let translatedPdfBlob: Blob | null = null;
+  const warnings: string[] = [];
+
+  try {
+    translatedPdfBlob = await generateTranslatedPdf(
+      translatedPages,
+      options.targetLanguage,
+    );
+  } catch (error) {
+    warnings.push(
+      error instanceof Error && error.message.trim()
+        ? error.message.trim()
+        : "Translated PDF download could not be generated locally.",
+    );
+  }
 
   emitProgress(options, "generating", 100, "Translation complete.");
 
@@ -268,6 +290,53 @@ export async function translatePdfLocally(
     detectedSourceLanguage: toLanguageName(options.sourceLanguage),
     warnings: [
       "Used local PDF translation fallback. For scanned PDFs, server OCR gives better results.",
+      ...warnings,
+    ],
+  };
+}
+
+export async function translateImageLocally(
+  file: File,
+  options: LocalTranslationOptions,
+): Promise<LocalTranslationResult> {
+  emitProgress(options, "extracting", 10, "Reading image for OCR...");
+  const { recognize } = await getTesseract();
+
+  const recognition = await recognize(file, "eng+hin", {
+    logger: (message: { status?: string; progress?: number }) => {
+      if (typeof message.progress === "number") {
+        emitProgress(
+          options,
+          "extracting",
+          10 + message.progress * 55,
+          message.status || "Running image OCR...",
+        );
+      }
+    },
+  });
+
+  const originalText = recognition?.data?.text?.replace(/\s+\n/g, "\n").trim() || "";
+
+  if (!originalText) {
+    throw new Error("Local image OCR could not read text from this file.");
+  }
+
+  emitProgress(options, "translating", 72, "Translating OCR text...");
+  const translatedText = await translateChunkedText(
+    originalText,
+    options.sourceLanguage,
+    options.targetLanguage,
+  );
+
+  emitProgress(options, "generating", 100, "Image translation complete.");
+
+  return {
+    originalText,
+    translatedText,
+    translatedPdfBlob: null,
+    detectedSourceLanguage: toLanguageName(options.sourceLanguage),
+    warnings: [
+      "Used local image OCR fallback. Review translated text carefully for scanned images.",
     ],
   };
 }

@@ -46,7 +46,7 @@ export const schemes: Scheme[] = [
   },
   {
     id: "4",
-    title: "Elevate Karnataka 2024",
+    title: "Elevate Karnataka 2026",
     description: "Grant-in-aid for innovation and early-stage startups in emergin...",
     category: "Startup",
     state: "Karnataka",
