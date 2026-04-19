@@ -21,8 +21,21 @@ function normalizeLanguage(value: string): "hi" | "en" {
 
 function getPrompt(language: "hi" | "en") {
   return language === "hi"
-    ? "Hindi or Hinglish about Indian government schemes, farmers, Aadhaar, PAN card, subsidy, loan, eligibility"
-    : "Indian government scheme, farmer, Aadhaar, subsidy, loan, eligibility";
+    ? "Transcribe this audio accurately in Hindi or Hinglish. Return only the spoken words. The topic may include Indian government schemes, farmers, Aadhaar, PAN card, subsidy, loan, and eligibility."
+    : "Transcribe this audio accurately in English. Return only the spoken words. The topic may include Indian government schemes, farmer support, Aadhaar, subsidy, loan, and eligibility.";
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
 }
 
 serve(async (req) => {
@@ -31,8 +44,10 @@ serve(async (req) => {
   }
 
   try {
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
 
     const formData = await req.formData();
     const file = formData.get("file");
@@ -60,49 +75,46 @@ serve(async (req) => {
       });
     }
 
-    const extension = getExtension(file.type);
-    const fileName = `recording.${extension}`;
     const prompt = getPrompt(whisperLang);
+    const buffer = await file.arrayBuffer();
+    const audioBase64 = arrayBufferToBase64(buffer);
+    const mimeType = file.type || `audio/${getExtension(file.type)}`;
 
-    let response: Response;
-
-    if (OPENAI_API_KEY) {
-      const whisperForm = new FormData();
-      whisperForm.append("file", new File([file], fileName, { type: file.type || "audio/webm" }));
-      whisperForm.append("model", "whisper-1");
-      whisperForm.append("response_format", "json");
-      whisperForm.append("language", whisperLang);
-      whisperForm.append("prompt", prompt);
-
-      response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+      {
         method: "POST",
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-        body: whisperForm,
-      });
-    } else if (LOVABLE_API_KEY) {
-      const lovableForm = new FormData();
-      lovableForm.append("file", new File([file], fileName, { type: file.type || "audio/webm" }));
-      lovableForm.append("model", "openai/whisper-1");
-      lovableForm.append("response_format", "json");
-      lovableForm.append("language", whisperLang);
-      lovableForm.append("prompt", prompt);
-
-      response = await fetch("https://ai.gateway.lovable.dev/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}` },
-        body: lovableForm,
-      });
-    } else {
-      throw new Error("No transcription key configured. Add OPENAI_API_KEY to Supabase secrets.");
-    }
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: audioBase64,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+          },
+        }),
+      },
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Transcription API error:", response.status, errorText);
+      console.error("Gemini transcription error:", response.status, errorText);
 
       let errorMessage = "Audio transcription failed";
       if (response.status === 429) errorMessage = "Rate limit exceeded. Please try again shortly.";
-      else if (response.status === 402) errorMessage = "AI credits exhausted.";
       else if (response.status === 413) errorMessage = "Recording too large. Please try a shorter clip.";
       else if (response.status === 415) errorMessage = "Unsupported audio format.";
       else if (response.status === 401 || response.status === 403) errorMessage = "Transcription service is not authorized.";
@@ -114,7 +126,11 @@ serve(async (req) => {
     }
 
     const result = await response.json();
-    const transcript = String(result.text ?? "").trim();
+    const transcript = String(
+      result.candidates?.[0]?.content?.parts
+        ?.map((part: Record<string, unknown>) => (typeof part.text === "string" ? part.text : ""))
+        .join("") ?? "",
+    ).trim();
 
     if (!transcript) {
       return new Response(

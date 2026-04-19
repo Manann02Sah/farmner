@@ -10,8 +10,10 @@ serve(async (req) => {
 
   try {
     const { messages, language, schemeCatalog } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
 
     const lang = language === "hi" ? "Hindi" : "English";
     const matchedSchemes = Array.isArray(schemeCatalog) ? schemeCatalog.slice(0, 8) : [];
@@ -39,21 +41,40 @@ IMPORTANT RULES:
 
 ${catalogPrompt}`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
+    const conversationText = Array.isArray(messages)
+      ? messages
+          .map((message: Record<string, unknown>) => {
+            const role = message.role === "assistant" ? "Assistant" : "User";
+            const content = typeof message.content === "string" ? message.content : "";
+            return `${role}: ${content}`;
+          })
+          .join("\n\n")
+      : "";
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `${systemPrompt}\n\nConversation so far:\n${conversationText}\n\nRespond to the latest user request only.`,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.7,
+          },
+        }),
       },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
+    );
 
     if (!response.ok) {
       if (response.status === 429) {
@@ -68,13 +89,25 @@ ${catalogPrompt}`;
       }
       const t = await response.text();
       console.error("AI gateway error:", response.status, t);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), {
+      return new Response(JSON.stringify({ error: "Gemini API error" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    const data = await response.json();
+    const assistantText =
+      data.candidates?.[0]?.content?.parts
+        ?.map((part: Record<string, unknown>) => (typeof part.text === "string" ? part.text : ""))
+        .join("")?.trim() ?? "";
+
+    if (!assistantText) {
+      return new Response(JSON.stringify({ error: "Gemini returned an empty response" }), {
+        status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ text: assistantText }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
     console.error("chat error:", e);

@@ -101,8 +101,10 @@ serve(async (req) => {
   }
 
   try {
-    const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      throw createHttpError("GEMINI_API_KEY is not configured in Supabase secrets.", 503);
+    }
     const contentType = req.headers.get("content-type")?.toLowerCase() ?? "";
 
     let fileName = "";
@@ -202,131 +204,55 @@ Use the uploaded file content itself, not the file name.
 If the visible language does not match the requested source language, mention that in warnings but still translate what is visible.
 Keep the translated output readable and structured for a user who wants the document text in ${targetLanguageName}.`;
 
-    if (ANTHROPIC_API_KEY) {
-      const messageContent = isPdf
-        ? [
-            {
-              type: "document",
-              source: {
-                type: "base64",
-                media_type: "application/pdf",
-                data: fileBase64,
-              },
-            },
-            {
-              type: "text",
-              text: translationPrompt,
-            },
-          ]
-        : [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: fileMimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-                data: fileBase64,
-              },
-            },
-            {
-              type: "text",
-              text: translationPrompt,
-            },
-          ];
-
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+      {
         method: "POST",
         headers: {
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages: [
+          contents: [
             {
               role: "user",
-              content: messageContent,
-            },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Anthropic document conversion error:", response.status, errorText);
-        throw createHttpError("The document conversion service could not complete the OCR request.", 502);
-      }
-
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text ?? "";
-      const result = parseTranslationResult(rawText, normalizedSourceLanguage);
-
-      if (!result.translatedText) {
-        throw createHttpError("The conversion service returned an empty translation. Please try a clearer document.", 502);
-      }
-
-      return jsonResponse(result);
-    }
-
-    if (LOVABLE_API_KEY && isImage) {
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.0-flash",
-          messages: [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: [
+              parts: [
+                { text: `${systemPrompt}\n\n${translationPrompt}` },
                 {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:${fileMimeType};base64,${fileBase64}`,
+                  inline_data: {
+                    mime_type: fileMimeType,
+                    data: fileBase64,
                   },
-                },
-                {
-                  type: "text",
-                  text: translationPrompt,
                 },
               ],
             },
           ],
-          max_tokens: 4096,
-          response_format: { type: "json_object" },
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
         }),
-      });
+      },
+    );
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Lovable document conversion error:", response.status, errorText);
-        throw createHttpError("The image conversion service could not complete the OCR request.", 502);
-      }
-
-      const data = await response.json();
-      const rawText = data.choices?.[0]?.message?.content ?? "";
-      const result = parseTranslationResult(rawText, normalizedSourceLanguage);
-
-      if (!result.translatedText) {
-        throw createHttpError("The conversion service returned an empty translation. Please try a clearer document.", 502);
-      }
-
-      return jsonResponse(result);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini document conversion error:", response.status, errorText);
+      throw createHttpError("The document conversion service could not complete the OCR request.", 502);
     }
 
-    if (isPdf) {
-      throw createHttpError(
-        "PDF document conversion requires ANTHROPIC_API_KEY in the deployed Supabase function secrets.",
-        503,
-      );
+    const data = await response.json();
+    const rawText = String(
+      data.candidates?.[0]?.content?.parts
+        ?.map((part: Record<string, unknown>) => (typeof part.text === "string" ? part.text : ""))
+        .join("") ?? "",
+    );
+    const result = parseTranslationResult(rawText, normalizedSourceLanguage);
+
+    if (!result.translatedText) {
+      throw createHttpError("The conversion service returned an empty translation. Please try a clearer document.", 502);
     }
 
-    throw createHttpError("No OCR translation provider is configured for this document type.", 503);
+    return jsonResponse(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     const status =
