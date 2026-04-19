@@ -8,13 +8,18 @@ export function useChatSessions() {
     queryKey: ["chat-sessions", user?.id],
     enabled: !!user,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("chat_sessions")
-        .select("*")
-        .eq("user_id", user!.id)
-        .order("updated_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase
+          .from("chat_sessions")
+          .select("*")
+          .eq("user_id", user!.id)
+          .order("updated_at", { ascending: false });
+        if (error) throw error;
+        return data;
+      } catch (error) {
+        console.warn("Chat sessions could not be loaded.", error);
+        return [];
+      }
     },
   });
 }
@@ -25,13 +30,18 @@ export function useChatMessages(sessionId: string | null) {
     queryKey: ["chat-messages", sessionId],
     enabled: !!user && !!sessionId,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("chat_messages")
-        .select("*")
-        .eq("session_id", sessionId!)
-        .order("created_at", { ascending: true });
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase
+          .from("chat_messages")
+          .select("*")
+          .eq("session_id", sessionId!)
+          .order("created_at", { ascending: true });
+        if (error) throw error;
+        return data;
+      } catch (error) {
+        console.warn("Chat messages could not be loaded.", error);
+        return [];
+      }
     },
   });
 }

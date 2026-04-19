@@ -15,9 +15,10 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { supabase } from "@/integrations/supabase/client";
 import { invokeJsonEdgeFunction } from "@/lib/edgeFunctions";
 import { translatePdfLocally } from "@/lib/localPdfTranslator";
+import { getSupabaseFunctionUrl, getSupabasePublishableKey } from "@/lib/supabaseConfig";
 
-const CONVERT_DOCUMENT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/convert-document`;
-const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const CONVERT_DOCUMENT_URL = getSupabaseFunctionUrl("convert-document");
+const PUBLISHABLE_KEY = getSupabasePublishableKey();
 const SUPPORTED_FORMATS = ".pdf,.jpg,.jpeg,.png,.webp";
 const MAX_FILE_SIZE_MB = 15;
 

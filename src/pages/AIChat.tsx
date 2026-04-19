@@ -9,11 +9,13 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useChatMessages, useChatSessions, useCreateSession, useSendMessage } from "@/hooks/useChat";
 import { useSchemes } from "@/hooks/useSchemes";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeFormDataEdgeFunction } from "@/lib/edgeFunctions";
+import { getSupabaseFunctionUrl, getSupabasePublishableKey } from "@/lib/supabaseConfig";
 import { findRelevantSchemes, MatchedScheme } from "@/lib/schemeMatching";
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
-const TRANSCRIBE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/transcribe-audio`;
-const PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const CHAT_URL = getSupabaseFunctionUrl("chat");
+const TRANSCRIBE_URL = getSupabaseFunctionUrl("transcribe-audio");
+const PUBLISHABLE_KEY = getSupabasePublishableKey();
 
 type ChatRole = "user" | "assistant";
 type ChatSources = {
@@ -296,7 +298,14 @@ const AIChat = () => {
     [language, speakerEnabled],
   );
 
-  const parseAssistantStream = useCallback(async (response: Response) => {
+  const parseAssistantResponse = useCallback(async (response: Response) => {
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+
+    if (contentType.includes("application/json")) {
+      const data = await response.json().catch(() => ({}));
+      return String(data.text ?? "").trim();
+    }
+
     if (!response.body) throw new Error("No response body");
 
     const reader = response.body.getReader();
@@ -357,9 +366,9 @@ const AIChat = () => {
         throw new Error(errorData.error || (language === "hi" ? "सहायक से उत्तर नहीं मिला" : "Assistant response failed"));
       }
 
-      return parseAssistantStream(response);
+      return parseAssistantResponse(response);
     },
-    [getAuthHeaders, language, parseAssistantStream],
+    [getAuthHeaders, language, parseAssistantResponse],
   );
 
   const sendChatMessage = useCallback(
@@ -445,33 +454,29 @@ const AIChat = () => {
         formData.append("file", new File([audioBlob], `voice-input.${extension}`, { type: audioBlob.type || "audio/webm" }));
         formData.append("language", language);
 
-        const headers = await getAuthHeaders();
-        const response = await fetch(TRANSCRIBE_URL, {
-          method: "POST",
-          headers,
-          body: formData,
-        });
+        const data = await invokeFormDataEdgeFunction<{ text?: string }>(
+          "transcribe-audio",
+          TRANSCRIBE_URL,
+          formData,
+          getAuthHeaders,
+          language === "hi" ? "ऑडियो ट्रांसक्रिप्शन विफल रहा." : "Audio transcription failed.",
+        );
 
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(data.error || (language === "hi" ? "ऑडियो ट्रांसक्रिप्शन विफल रहा" : "Audio transcription failed"));
+        const transcript = String(data.text ?? "").trim();
+        if (!transcript) {
+          setVoiceState("idle");
+          toast.error(language === "hi" ? "कोई आवाज़ समझ में नहीं आई" : "No speech detected");
+          return;
         }
 
-      const transcript = String(data.text ?? "").trim();
-      if (!transcript) {
+        setDraft(transcript);
+        await sendChatMessage(transcript, { bypassBusyCheck: true });
+      } catch (error) {
         setVoiceState("idle");
-        toast.error(language === "hi" ? "कोई आवाज़ समझ में नहीं आई" : "No speech detected");
-        return;
-        }
-
-      setDraft(transcript);
-      await sendChatMessage(transcript, { bypassBusyCheck: true });
-    } catch (error) {
-      setVoiceState("idle");
-      toast.error(error instanceof Error ? error.message : language === "hi" ? "वॉइस प्रोसेस नहीं हुई" : "Voice processing failed");
-    }
-  },
-  [getAuthHeaders, language, sendChatMessage],
+        toast.error(error instanceof Error ? error.message : language === "hi" ? "वॉइस प्रोसेस नहीं हुई" : "Voice processing failed");
+      }
+    },
+    [getAuthHeaders, language, sendChatMessage],
   );
 
   const startMediaRecording = useCallback(async () => {

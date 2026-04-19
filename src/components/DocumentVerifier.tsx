@@ -1,8 +1,12 @@
-import { useState } from "react";
-import { ChevronDown, ChevronUp, FileText, Image as ImageIcon, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { ChevronDown, ChevronUp, FileText, Image as ImageIcon, Loader2, Upload, X } from "lucide-react";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { SchemeRow } from "@/hooks/useSchemes";
+import { supabase } from "@/integrations/supabase/client";
+import { invokeJsonEdgeFunction } from "@/lib/edgeFunctions";
+import { getSupabaseFunctionUrl, getSupabasePublishableKey } from "@/lib/supabaseConfig";
 
 interface DocumentVerifierProps {
   scheme: SchemeRow;
@@ -208,6 +212,8 @@ const DEFAULT_DOCS: RequiredDoc[] = [
 ];
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "svg"] as const;
+const VERIFY_DOCUMENT_URL = getSupabaseFunctionUrl("verify-document");
+const PUBLISHABLE_KEY = getSupabasePublishableKey();
 
 function DocumentPreview({ basePath, alt }: { basePath: string; alt: string }) {
   const [extensionIndex, setExtensionIndex] = useState(0);
@@ -226,10 +232,84 @@ function DocumentPreview({ basePath, alt }: { basePath: string; alt: string }) {
   );
 }
 
+type VerificationResult = {
+  status: "VERIFIED" | "NEEDS_REVIEW" | "REJECTED";
+  confidence: number;
+  message: string;
+  extractedText: string;
+  detectedFields: string[];
+  missingFields: string[];
+  tips: string[];
+  ocrPerformed: boolean;
+};
+
+const readFileAsBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1] ?? "");
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
 const DocumentVerifier = ({ scheme, onClose }: DocumentVerifierProps) => {
   const { t, language } = useLanguage();
   const requiredDocs = REQUIRED_DOCS[scheme.category] || DEFAULT_DOCS;
   const [expandedDoc, setExpandedDoc] = useState<string | null>(requiredDocs[0]?.en ?? null);
+  const [selectedFileName, setSelectedFileName] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const activeDocument = requiredDocs.find((doc) => doc.en === expandedDoc) ?? requiredDocs[0];
+
+  const getAuthHeaders = async () => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? PUBLISHABLE_KEY;
+
+    return {
+      apikey: PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+    };
+  };
+
+  const verifyFile = async (file: File) => {
+    if (!activeDocument) return;
+
+    setIsVerifying(true);
+    setSelectedFileName(file.name);
+
+    try {
+      const fileBase64 = await readFileAsBase64(file);
+      const result = await invokeJsonEdgeFunction<VerificationResult>(
+        "verify-document",
+        VERIFY_DOCUMENT_URL,
+        {
+          documentType: activeDocument.en,
+          schemeTitle: scheme.title,
+          language,
+          fileName: file.name,
+          fileMimeType: file.type || "application/octet-stream",
+          fileBase64,
+        },
+        getAuthHeaders,
+        t("doc.verifyFailed") || "Verification failed",
+      );
+
+      setVerificationResult(result);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : t("doc.autoVerifyFail") || "Auto verification failed";
+      toast.error(message);
+      setVerificationResult(null);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
 
   return (
     <motion.div
@@ -263,6 +343,106 @@ const DocumentVerifier = ({ scheme, onClose }: DocumentVerifierProps) => {
         </div>
 
         <div className="p-6">
+          <div className="rounded-2xl border border-outline-variant/20 bg-surface-high/30 p-5 mb-6">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-1">
+                  {t("doc.requiredDocs") || "Required document"}
+                </p>
+                <p className="text-sm text-on-surface-variant mt-1">
+                  {selectedFileName || "Upload a PDF or image for the selected document type to run OCR verification."}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isVerifying}
+                className="gradient-primary text-primary-foreground font-medium px-5 py-3 rounded-xl inline-flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                {isVerifying ? "Verifying..." : "Upload and verify"}
+              </button>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void verifyFile(file);
+                }
+                event.target.value = "";
+              }}
+            />
+
+            {verificationResult && (
+              <div className="mt-5 grid gap-4 lg:grid-cols-[0.8fr,1.2fr]">
+                <div className="rounded-2xl bg-background/50 p-4">
+                  <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-2">
+                    {t("doc.confidence") || "Confidence"}
+                  </p>
+                  <p className="text-3xl font-headline font-bold mb-3">{verificationResult.confidence}%</p>
+                  <span className="inline-flex rounded-full bg-primary/10 px-3 py-1 text-xs font-bold uppercase tracking-wider text-primary">
+                    {verificationResult.status.replace("_", " ")}
+                  </span>
+                  <p className="text-sm text-on-surface-variant mt-3">{verificationResult.message}</p>
+                </div>
+
+                <div className="rounded-2xl bg-background/50 p-4 space-y-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-2">OCR</p>
+                    <pre className="whitespace-pre-wrap text-sm text-foreground font-sans">
+                      {verificationResult.extractedText}
+                    </pre>
+                  </div>
+
+                  {verificationResult.detectedFields.length > 0 && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-2">Detected fields</p>
+                      <div className="flex flex-wrap gap-2">
+                        {verificationResult.detectedFields.map((field) => (
+                          <span key={field} className="rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
+                            {field}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {verificationResult.missingFields.length > 0 && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-2">Missing fields</p>
+                      <div className="flex flex-wrap gap-2">
+                        {verificationResult.missingFields.map((field) => (
+                          <span key={field} className="rounded-full bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive">
+                            {field}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {verificationResult.tips.length > 0 && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-on-surface-variant mb-2">Tips</p>
+                      <ul className="space-y-2">
+                        {verificationResult.tips.map((tip) => (
+                          <li key={tip} className="text-sm text-on-surface-variant">
+                            {tip}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid gap-4">
             {requiredDocs.map((doc) => {
               const isExpanded = expandedDoc === doc.en;
