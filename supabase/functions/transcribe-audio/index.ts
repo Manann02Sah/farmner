@@ -6,6 +6,65 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+const OPENAI_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
+
+type ProviderFailure = {
+  status: number;
+  message: string;
+  provider: "gemini" | "openai";
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function shouldFallbackToOpenAI(status: number) {
+  return status === 401 || status === 403 || status === 404 || status === 429 || status >= 500;
+}
+
+async function getGeminiErrorMessage(response: Response, fallbackMessage: string) {
+  const responseText = await response.text();
+  console.error("Gemini transcription error:", response.status, responseText);
+
+  if (!responseText.trim()) {
+    return `${fallbackMessage} (status ${response.status})`;
+  }
+
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { message?: string; status?: string };
+    };
+    const detail = parsed.error?.message?.trim() || parsed.error?.status?.trim() || "";
+    return detail ? `${fallbackMessage}: ${detail}` : `${fallbackMessage} (status ${response.status})`;
+  } catch {
+    return `${fallbackMessage} (status ${response.status})`;
+  }
+}
+
+async function getOpenAIErrorMessage(response: Response, fallbackMessage: string) {
+  const responseText = await response.text();
+  console.error("OpenAI transcription error:", response.status, responseText);
+
+  if (!responseText.trim()) {
+    return `${fallbackMessage} (status ${response.status})`;
+  }
+
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { message?: string; code?: string; type?: string };
+    };
+    const detail =
+      parsed.error?.message?.trim() || parsed.error?.code?.trim() || parsed.error?.type?.trim() || "";
+    return detail ? `${fallbackMessage}: ${detail}` : `${fallbackMessage} (status ${response.status})`;
+  } catch {
+    return `${fallbackMessage} (status ${response.status})`;
+  }
+}
+
 function getExtension(mimeType: string): string {
   if (mimeType.includes("ogg")) return "ogg";
   if (mimeType.includes("mp4")) return "mp4";
@@ -25,6 +84,12 @@ function getPrompt(language: "hi" | "en") {
     : "Transcribe this audio accurately in English. Return only the spoken words. The topic may include Indian government schemes, farmer support, Aadhaar, subsidy, loan, and eligibility.";
 }
 
+function getNoSpeechMessage(language: "hi" | "en") {
+  return language === "hi"
+    ? "Koi speech detect nahi hui. Kripya saaf awaaz me dobara bolen."
+    : "No speech detected. Please speak clearly.";
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   const chunkSize = 0x8000;
@@ -38,6 +103,178 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+function extractGeminiTranscript(data: Record<string, unknown>) {
+  const candidates = Array.isArray(data.candidates) ? (data.candidates as Array<Record<string, unknown>>) : [];
+  const firstCandidate = candidates[0];
+  const content = firstCandidate?.content;
+  const parts =
+    content && typeof content === "object" && Array.isArray((content as Record<string, unknown>).parts)
+      ? ((content as Record<string, unknown>).parts as Array<Record<string, unknown>>)
+      : [];
+
+  return parts
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
+async function requestGeminiTranscription(
+  apiKey: string | null,
+  prompt: string,
+  file: File,
+  mimeType: string,
+  language: "hi" | "en",
+) {
+  if (!apiKey) {
+    return {
+      ok: false as const,
+      failure: {
+        status: 503,
+        message: "GEMINI_API_KEY is not configured",
+        provider: "gemini" as const,
+      },
+    };
+  }
+
+  const buffer = await file.arrayBuffer();
+  const audioBase64 = arrayBufferToBase64(buffer);
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: audioBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+        },
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    let errorMessage = "Audio transcription failed";
+    if (response.status === 429) errorMessage = "Rate limit exceeded. Please try again shortly.";
+    else if (response.status === 413) errorMessage = "Recording too large. Please try a shorter clip.";
+    else if (response.status === 415) errorMessage = "Unsupported audio format.";
+    else if (response.status === 401 || response.status === 403) {
+      errorMessage = "Transcription service is not authorized. Check GEMINI_API_KEY and its API restrictions";
+    } else if (response.status === 400) {
+      errorMessage = "Transcription request was rejected by Gemini";
+    }
+
+    const detailedMessage = await getGeminiErrorMessage(response, errorMessage);
+    return {
+      ok: false as const,
+      failure: {
+        status: response.status >= 400 && response.status < 600 ? response.status : 500,
+        message: detailedMessage,
+        provider: "gemini" as const,
+      },
+    };
+  }
+
+  const result = await response.json();
+  const transcript = extractGeminiTranscript(result);
+  if (!transcript) {
+    return {
+      ok: false as const,
+      failure: {
+        status: 422,
+        message: getNoSpeechMessage(language),
+        provider: "gemini" as const,
+      },
+    };
+  }
+
+  return { ok: true as const, text: transcript };
+}
+
+async function requestOpenAITranscription(
+  apiKey: string | null,
+  prompt: string,
+  file: File,
+  language: "hi" | "en",
+) {
+  if (!apiKey) {
+    return {
+      ok: false as const,
+      failure: {
+        status: 503,
+        message: "OPENAI_API_KEY is not configured",
+        provider: "openai" as const,
+      },
+    };
+  }
+
+  const formData = new FormData();
+  formData.append("file", file, file.name || `voice-input.${getExtension(file.type)}`);
+  formData.append("model", OPENAI_TRANSCRIBE_MODEL);
+  formData.append("response_format", "text");
+  formData.append("prompt", prompt);
+  formData.append("language", language);
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Audio transcription failed";
+    if (response.status === 429) errorMessage = "OpenAI transcription rate limit exceeded.";
+    else if (response.status === 413) errorMessage = "Recording too large. Please try a shorter clip.";
+    else if (response.status === 415) errorMessage = "Unsupported audio format.";
+    else if (response.status === 401 || response.status === 403) errorMessage = "OpenAI transcription is not authorized. Check OPENAI_API_KEY";
+
+    const detailedMessage = await getOpenAIErrorMessage(response, errorMessage);
+    return {
+      ok: false as const,
+      failure: {
+        status: response.status >= 400 && response.status < 600 ? response.status : 500,
+        message: detailedMessage,
+        provider: "openai" as const,
+      },
+    };
+  }
+
+  const transcript = (await response.text()).trim();
+  if (!transcript) {
+    return {
+      ok: false as const,
+      failure: {
+        status: 422,
+        message: getNoSpeechMessage(language),
+        provider: "openai" as const,
+      },
+    };
+  }
+
+  return { ok: true as const, text: transcript };
+}
+
+function combineFailures(primaryFailure: ProviderFailure, fallbackFailure: ProviderFailure) {
+  return `${primaryFailure.message} Fallback to ${fallbackFailure.provider} also failed: ${fallbackFailure.message}`;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -45,9 +282,7 @@ serve(async (req) => {
 
   try {
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not configured");
-    }
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 
     const formData = await req.formData();
     const file = formData.get("file");
@@ -55,108 +290,52 @@ serve(async (req) => {
     const whisperLang = normalizeLanguage(language);
 
     if (!(file instanceof File)) {
-      return new Response(JSON.stringify({ error: "Audio file is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Audio file is required" }, 400);
     }
 
     if (file.size > 25 * 1024 * 1024) {
-      return new Response(JSON.stringify({ error: "Audio file too large (max 25MB)" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Audio file too large (max 25MB)" }, 400);
     }
 
     if (file.size < 100) {
-      return new Response(JSON.stringify({ error: "Audio file is empty or too short" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Audio file is empty or too short" }, 400);
     }
 
     const prompt = getPrompt(whisperLang);
-    const buffer = await file.arrayBuffer();
-    const audioBase64 = arrayBufferToBase64(buffer);
     const mimeType = file.type || `audio/${getExtension(file.type)}`;
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: prompt },
-                {
-                  inline_data: {
-                    mime_type: mimeType,
-                    data: audioBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0,
-          },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini transcription error:", response.status, errorText);
-
-      let errorMessage = "Audio transcription failed";
-      if (response.status === 429) errorMessage = "Rate limit exceeded. Please try again shortly.";
-      else if (response.status === 413) errorMessage = "Recording too large. Please try a shorter clip.";
-      else if (response.status === 415) errorMessage = "Unsupported audio format.";
-      else if (response.status === 401 || response.status === 403) errorMessage = "Transcription service is not authorized.";
-
-      return new Response(JSON.stringify({ error: errorMessage }), {
-        status: response.status >= 400 && response.status < 600 ? response.status : 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const result = await response.json();
-    const transcript = String(
-      result.candidates?.[0]?.content?.parts
-        ?.map((part: Record<string, unknown>) => (typeof part.text === "string" ? part.text : ""))
-        .join("") ?? "",
-    ).trim();
-
-    if (!transcript) {
-      return new Response(
-        JSON.stringify({
-          error: whisperLang === "hi" ? "कोई आवाज़ समझ में नहीं आई। कृपया स्पष्ट रूप से बोलें।" : "No speech detected. Please speak clearly.",
-        }),
-        {
-          status: 422,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    console.log(`[${whisperLang}] Transcribed: "${transcript.slice(0, 80)}..."`);
-
-    return new Response(JSON.stringify({ text: transcript, language: whisperLang }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const normalizedFile = new File([file], file.name || `voice-input.${getExtension(mimeType)}`, {
+      type: mimeType,
     });
+
+    const geminiResult = await requestGeminiTranscription(
+      GEMINI_API_KEY,
+      prompt,
+      normalizedFile,
+      mimeType,
+      whisperLang,
+    );
+    if (geminiResult.ok) {
+      console.log(`[${whisperLang}] Transcribed via Gemini: "${geminiResult.text.slice(0, 80)}..."`);
+      return jsonResponse({ text: geminiResult.text, language: whisperLang });
+    }
+
+    if (!shouldFallbackToOpenAI(geminiResult.failure.status)) {
+      return jsonResponse({ error: geminiResult.failure.message }, geminiResult.failure.status);
+    }
+
+    console.warn("Gemini transcription failed, trying OpenAI fallback", geminiResult.failure);
+    const openAIResult = await requestOpenAITranscription(OPENAI_API_KEY, prompt, normalizedFile, whisperLang);
+    if (openAIResult.ok) {
+      console.log(`[${whisperLang}] Transcribed via OpenAI: "${openAIResult.text.slice(0, 80)}..."`);
+      return jsonResponse({ text: openAIResult.text, language: whisperLang });
+    }
+
+    return jsonResponse(
+      { error: combineFailures(geminiResult.failure, openAIResult.failure) },
+      openAIResult.failure.status,
+    );
   } catch (error) {
     console.error("transcribe-audio error:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown transcription error" }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      },
-    );
+    return jsonResponse({ error: error instanceof Error ? error.message : "Unknown transcription error" }, 500);
   }
 });
