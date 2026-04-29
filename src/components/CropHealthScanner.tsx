@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Camera, CheckCircle2, Leaf, Loader2, RefreshCcw, ShieldAlert, SquareActivity } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useFarmerProfile } from "@/hooks/useFarmerProfile";
 import { useSchemes } from "@/hooks/useSchemes";
+import { buildProfileSearchText } from "@/lib/copilot";
 import { findRelevantSchemes } from "@/lib/schemeMatching";
 
 type ZoneStatus = "safe" | "warning" | "disease";
@@ -44,6 +46,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 const CropHealthScanner = () => {
   const { language } = useLanguage();
+  const { profile } = useFarmerProfile(language);
   const { data: schemes = [] } = useSchemes();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -374,13 +377,18 @@ const CropHealthScanner = () => {
       );
     }
 
-    const matchedSchemes = findRelevantSchemes(schemes, schemeQuery.join(" "), 3);
+    const matchedSchemes = findRelevantSchemes(
+      schemes,
+      `${schemeQuery.join(" ")} ${buildProfileSearchText(profile)}`,
+      3,
+      { profile },
+    );
 
     return {
       recommendations,
       matchedSchemes,
     };
-  }, [language, metrics, schemes]);
+  }, [language, metrics, profile, schemes]);
 
   const statCards = [
     {
@@ -523,6 +531,9 @@ const CropHealthScanner = () => {
                         </div>
                         <p className="font-headline font-bold text-base mb-1">{scheme.title}</p>
                         <p className="text-sm text-on-surface-variant line-clamp-2 mb-2">{scheme.description}</p>
+                        {scheme.recommendationContext?.whyMatched?.[0] && (
+                          <p className="text-xs text-accent mb-2">{scheme.recommendationContext.whyMatched[0]}</p>
+                        )}
                         <span className="text-sm text-primary font-medium">{copy.openDetails}</span>
                       </Link>
                     ))}

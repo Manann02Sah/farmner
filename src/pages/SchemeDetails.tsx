@@ -2,8 +2,12 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, ExternalLink, FileCheck, GitCompareArrows, Loader2, MapPin, ShieldCheck } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import ApplicationCopilotPanel from "@/components/ApplicationCopilotPanel";
+import FarmerProfileCard from "@/components/FarmerProfileCard";
 import Footer from "@/components/Footer";
 import DocumentVerifier from "@/components/DocumentVerifier";
+import { useFarmerProfile } from "@/hooks/useFarmerProfile";
+import { useDocumentReadiness } from "@/hooks/useDocumentReadiness";
 import { SchemeRow, useSchemes } from "@/hooks/useSchemes";
 import { useLanguage } from "@/contexts/LanguageContext";
 
@@ -13,6 +17,7 @@ const SchemeDetails = () => {
   const { t, language } = useLanguage();
   const { data: schemes = [], isLoading } = useSchemes();
   const [verifyScheme, setVerifyScheme] = useState<SchemeRow | null>(null);
+  const { profile, saveProfile, isSaving } = useFarmerProfile(language);
 
   const copy = useMemo(
     () =>
@@ -59,6 +64,7 @@ const SchemeDetails = () => {
   );
 
   const scheme = schemes.find((entry) => entry.id === schemeId);
+  const readiness = useDocumentReadiness(scheme?.id ?? schemeId ?? "unknown-scheme", scheme?.category ?? "General");
 
   if (isLoading) {
     return (
@@ -178,6 +184,30 @@ const SchemeDetails = () => {
             </div>
           </motion.section>
         </div>
+
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }} className="mb-8">
+          <FarmerProfileCard
+            language={language}
+            profile={profile}
+            isSaving={isSaving}
+            title={language === "hi" ? "Farmer profile memory" : "Farmer profile memory"}
+            subtitle={
+              language === "hi"
+                ? "Ek baar profile save karke iss scheme ke liye smarter eligibility aur document guidance paayen."
+                : "Save your profile once to unlock smarter eligibility checks and document guidance for this scheme."
+            }
+            onSave={saveProfile}
+          />
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.14 }} className="mb-10">
+          <ApplicationCopilotPanel
+            scheme={scheme}
+            profile={profile}
+            readiness={readiness.summary}
+            language={language}
+          />
+        </motion.div>
 
         <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="bg-surface-container rounded-3xl p-6 ghost-border mb-10">
           <h2 className="font-headline font-bold text-xl mb-4">{copy.benefits}</h2>

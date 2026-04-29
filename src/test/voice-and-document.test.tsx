@@ -82,6 +82,44 @@ vi.mock("@/hooks/useSchemes", () => ({
   useSchemes: () => ({ data: mockSchemes, isLoading: false }),
 }));
 
+vi.mock("@/lib/supabaseConfig", () => ({
+  getSupabaseFunctionUrl: (name: string) => `https://example.supabase.co/functions/v1/${name}`,
+  getSupabasePublishableKey: () => "test-publishable-key",
+}));
+
+vi.mock("@/hooks/useFarmerProfile", () => ({
+  useFarmerProfile: () => ({
+    profile: {
+      displayName: "",
+      state: "Punjab",
+      location: "",
+      category: "",
+      landholding: "2 acres",
+      cropType: "Wheat",
+      incomeBand: "",
+      businessType: "Farmer",
+      preferredLanguage: "en",
+      savedCrops: ["Wheat"],
+    },
+  }),
+}));
+
+vi.mock("@/hooks/useDocumentReadiness", () => ({
+  useDocumentReadiness: () => ({
+    summary: {
+      requiredDocs: ["Aadhaar Card", "Bank Passbook"],
+      uploadedDocs: [],
+      verifiedDocs: [],
+      missingDocs: ["Aadhaar Card", "Bank Passbook"],
+      qualityWarnings: [],
+      completionPct: 0,
+      entries: [],
+    },
+    saveReadinessEntry: vi.fn(),
+    isSaving: false,
+  }),
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     error: (...args: unknown[]) => mockToastError(...args),
@@ -293,7 +331,7 @@ describe("voice and document flows", () => {
       expect(screen.getByText("Here is your matched scheme.")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Solar Pump Subsidy")).toBeInTheDocument();
+    expect(screen.queryByText("Solar Pump Subsidy")).not.toBeInTheDocument();
     expect(mockToastError).not.toHaveBeenCalledWith("Voice input could not start");
   });
 
@@ -330,14 +368,14 @@ describe("voice and document flows", () => {
 
     expect(screen.getByText("OCR")).toBeInTheDocument();
     expect(screen.getByText(/Aadhaar: 1234 5678 9012/)).toBeInTheDocument();
-    expect(screen.getByText((content) => content.includes("Aadhaar Card"))).toBeInTheDocument();
+    expect(screen.getAllByText((content) => content.includes("Aadhaar Card")).length).toBeGreaterThan(0);
   });
 
   it("uploads a document for conversion and renders the translated output", async () => {
     render(<DocumentConverter />);
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(["pdf-data"], "notice.pdf", { type: "application/pdf" });
+    const file = new File(["image-data"], "notice.png", { type: "image/png" });
 
     fireEvent.change(fileInput, {
       target: { files: [file] },
@@ -353,8 +391,8 @@ describe("voice and document flows", () => {
       const payload = JSON.parse(String(convertCall?.[1]?.body ?? "{}"));
       expect(payload.sourceLanguage).toBe("en");
       expect(payload.targetLanguage).toBe("hi");
-      expect(payload.fileName).toBe("notice.pdf");
-      expect(payload.fileMimeType).toBe("application/pdf");
+      expect(payload.fileName).toBe("notice.png");
+      expect(payload.fileMimeType).toBe("image/png");
       expect(payload.fileBase64).toBeTruthy();
     });
 

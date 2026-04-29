@@ -79,6 +79,52 @@ vi.mock("@/hooks/useSavedSchemes", () => ({
   useUnsaveScheme: () => ({ mutate: vi.fn() }),
 }));
 
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
+    },
+    functions: {
+      invoke: vi.fn(),
+    },
+  },
+}));
+
+vi.mock("@/hooks/useFarmerProfile", () => ({
+  useFarmerProfile: () => ({
+    profile: {
+      displayName: "",
+      state: "",
+      location: "",
+      category: "",
+      landholding: "",
+      cropType: "",
+      incomeBand: "",
+      businessType: "",
+      preferredLanguage: "en",
+      savedCrops: [],
+    },
+    saveProfile: vi.fn(),
+    isSaving: false,
+  }),
+}));
+
+vi.mock("@/hooks/useDocumentReadiness", () => ({
+  useDocumentReadiness: () => ({
+    summary: {
+      requiredDocs: ["Aadhaar Card"],
+      uploadedDocs: [],
+      verifiedDocs: [],
+      missingDocs: ["Aadhaar Card"],
+      qualityWarnings: [],
+      completionPct: 0,
+      entries: [],
+    },
+    saveReadinessEntry: vi.fn(),
+    isSaving: false,
+  }),
+}));
+
 describe("scheme explorer and detail pages", () => {
   it("opens a real scheme detail page from the scheme card", async () => {
     render(

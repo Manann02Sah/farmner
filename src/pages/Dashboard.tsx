@@ -18,13 +18,18 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
+import FarmerProfileCard from "@/components/FarmerProfileCard";
 import Sidebar from "@/components/Sidebar";
 import Footer from "@/components/Footer";
 import DocumentConverter from "@/components/DocumentConverter";
 import CropHealthScanner from "@/components/CropHealthScanner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useFarmerProfile } from "@/hooks/useFarmerProfile";
 import { useSavedSchemes } from "@/hooks/useSavedSchemes";
+import { useSchemes } from "@/hooks/useSchemes";
+import { buildProfileSearchText } from "@/lib/copilot";
+import { findRelevantSchemes } from "@/lib/schemeMatching";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -36,10 +41,22 @@ type DashboardTab = "overview" | "converter" | "crop-health";
 const Dashboard = () => {
   const { user, loading } = useAuth();
   const { t, language } = useLanguage();
+  const { profile, saveProfile, isSaving } = useFarmerProfile(language);
   const { data: savedSchemes = [], isLoading: savedLoading } = useSavedSchemes();
+  const { data: catalogSchemes = [] } = useSchemes();
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
 
   const newsItems = [t("dash.news1"), t("dash.news2"), t("dash.news3")];
+  const explainableRecommendations = useMemo(
+    () =>
+      findRelevantSchemes(
+        catalogSchemes,
+        `recommended farmer schemes ${buildProfileSearchText(profile)}`,
+        2,
+        { profile },
+      ),
+    [catalogSchemes, profile],
+  );
 
   const copy = useMemo(
     () =>
@@ -278,7 +295,7 @@ const Dashboard = () => {
                         <action.icon className={`w-6 h-6 ${action.color} group-hover:scale-110 transition-transform`} />
                         <span className="text-sm font-medium text-center">{action.label}</span>
                       </Link>
-                    ) : (
+                  ) : (
                       <button
                         key={action.label}
                         type="button"
@@ -290,6 +307,24 @@ const Dashboard = () => {
                       </button>
                     ),
                   )}
+                </motion.div>
+              </div>
+
+              <div className="mb-8">
+                <motion.div initial="hidden" animate="visible" variants={fadeUp} custom={4.5}>
+                  <FarmerProfileCard
+                    language={language}
+                    profile={profile}
+                    isSaving={isSaving}
+                    title={language === "hi" ? "Profile memory" : "Profile memory"}
+                    subtitle={
+                      language === "hi"
+                        ? "Dashboard, chat aur scheme recommendations me ye profile reuse hota hai."
+                        : "This profile is reused across your dashboard, chat, and scheme recommendations."
+                    }
+                    saveLabel={language === "hi" ? "Save dashboard profile" : "Save dashboard profile"}
+                    onSave={saveProfile}
+                  />
                 </motion.div>
               </div>
 
@@ -341,7 +376,25 @@ const Dashboard = () => {
                     <h2 className="font-headline font-bold text-lg">{t("dash.aiRec")}</h2>
                   </div>
                   <div className="space-y-4 mb-5">
-                    {[
+                    {explainableRecommendations.length > 0 ? explainableRecommendations.map((item) => (
+                      <div key={item.id} className="rounded-2xl bg-surface-high p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary/10 text-primary">
+                            <Droplets className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{item.title}</p>
+                            <p className="text-xs text-on-surface-variant">{item.description}</p>
+                          </div>
+                        </div>
+                        {item.recommendationContext?.whyMatched?.[0] && (
+                          <p className="text-xs text-accent mt-3">{item.recommendationContext.whyMatched[0]}</p>
+                        )}
+                        <p className="text-[11px] uppercase tracking-wider text-on-surface-variant mt-2">
+                          {(item.recommendationContext?.usedProfile ?? []).join(" • ") || "Add more profile details for better matches"}
+                        </p>
+                      </div>
+                    )) : [
                       { icon: Droplets, title: t("dash.microIrrigation"), desc: t("dash.microIrrigationDesc"), color: "bg-primary/10 text-primary" },
                       { icon: MilkOff, title: t("dash.livestock"), desc: t("dash.livestockDesc"), color: "bg-accent/10 text-accent" },
                     ].map((item, index) => (

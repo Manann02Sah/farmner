@@ -7,8 +7,15 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useChatMessages, useChatSessions, useCreateSession, useSendMessage } from "@/hooks/useChat";
+import { useFarmerProfile } from "@/hooks/useFarmerProfile";
 import { useSchemes } from "@/hooks/useSchemes";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  decideRecommendationVisibility,
+  getRecommendationBundleFromLegacy,
+  RecommendationBundle,
+} from "@/lib/chatRecommendations";
+import { buildProfileSearchText } from "@/lib/copilot";
 import { invokeFormDataEdgeFunction } from "@/lib/edgeFunctions";
 import { getSupabaseFunctionUrl, getSupabasePublishableKey } from "@/lib/supabaseConfig";
 import { findRelevantSchemes, MatchedScheme } from "@/lib/schemeMatching";
@@ -19,6 +26,7 @@ const PUBLISHABLE_KEY = getSupabasePublishableKey();
 
 type ChatRole = "user" | "assistant";
 type ChatSources = {
+  recommendation?: RecommendationBundle | null;
   matchedSchemes?: MatchedScheme[];
 };
 
@@ -114,18 +122,35 @@ const normalizeChatMessage = (
   sources: message.sources && typeof message.sources === "object" ? (message.sources as ChatSources) : null,
 });
 
-const getMatchedSchemes = (sources: ChatSources | null | undefined) =>
-  Array.isArray(sources?.matchedSchemes) ? sources.matchedSchemes : [];
+const getRecommendationBundle = (sources: ChatSources | null | undefined) => {
+  if (sources?.recommendation?.schemes?.length) {
+    return sources.recommendation;
+  }
+
+  return getRecommendationBundleFromLegacy(sources?.matchedSchemes);
+};
+
+const getMatchedSchemes = (sources: ChatSources | null | undefined) => {
+  const recommendation = getRecommendationBundle(sources);
+  if (recommendation?.trigger === "explicit_request") {
+    return recommendation.schemes;
+  }
+
+  return Array.isArray(sources?.matchedSchemes) ? sources.matchedSchemes : [];
+};
 
 const AIChat = () => {
   const { user } = useAuth();
   const { language, t } = useLanguage();
+  const { profile } = useFarmerProfile(language);
   const [draft, setDraft] = useState("");
   const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
+  const [suggestedRecommendation, setSuggestedRecommendation] = useState<RecommendationBundle | null>(null);
+  const [showSuggestedRecommendation, setShowSuggestedRecommendation] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -346,7 +371,13 @@ const AIChat = () => {
   }, []);
 
   const fetchAssistantReply = useCallback(
-    async (messages: ChatMessage[], schemeCatalog: MatchedScheme[]) => {
+    async (
+      messages: ChatMessage[],
+      schemeCatalog: MatchedScheme[],
+      recommendationMode: "none" | "explicit_request" | "high_confidence",
+      usedSignals: string[],
+      unknowns: string[],
+    ) => {
       const headers = await getAuthHeaders();
       const response = await fetch(CHAT_URL, {
         method: "POST",
@@ -358,12 +389,22 @@ const AIChat = () => {
           messages: messages.map((message) => ({ role: message.role, content: message.content })),
           language,
           schemeCatalog,
+          recommendationMode,
+          usedSignals,
+          unknowns,
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || (language === "hi" ? "सहायक से उत्तर नहीं मिला" : "Assistant response failed"));
+        const fallbackMessage = language === "hi" ? "सहायक से उत्तर नहीं मिला" : "Assistant response failed";
+        const responseText = await response.text();
+
+        try {
+          const errorData = JSON.parse(responseText) as { error?: string };
+          throw new Error(errorData.error?.trim() || `${fallbackMessage} (status ${response.status})`);
+        } catch {
+          throw new Error(responseText.trim() ? `${fallbackMessage}: ${responseText.trim()}` : `${fallbackMessage} (status ${response.status})`);
+        }
       }
 
       return parseAssistantResponse(response);
@@ -380,30 +421,55 @@ const AIChat = () => {
       setDraft("");
       setVoiceState("responding");
       setStreamingContent("");
+      setShowSuggestedRecommendation(false);
 
       const currentMessages = displayMessages.map((message) => ({ role: message.role, content: message.content } as ChatMessage));
       const pendingMessages = [...currentMessages, { role: "user", content: userText } as ChatMessage];
-      const schemeCatalog = findRelevantSchemes(
+      const rankedSchemes = findRelevantSchemes(
         catalogSchemes,
-        pendingMessages.map((message) => message.content).join(" "),
+        `${pendingMessages.map((message) => message.content).join(" ")} ${buildProfileSearchText(profile)}`,
         8,
+        { profile },
       );
+      const recommendationDecision = decideRecommendationVisibility({
+        messages: pendingMessages,
+        matches: rankedSchemes,
+        profile,
+      });
+      const persistedRecommendation =
+        recommendationDecision.mode === "none"
+          ? null
+          : {
+              trigger: recommendationDecision.trigger,
+              schemes: recommendationDecision.schemes,
+              summary: recommendationDecision.summary,
+              usedSignals: recommendationDecision.usedSignals,
+              unknowns: recommendationDecision.unknowns,
+            };
 
       if (!user) {
         setLocalMessages((prev) => [...prev, { role: "user", content: userText }]);
 
         try {
-          const assistantText = await fetchAssistantReply(pendingMessages, schemeCatalog);
+          const assistantText = await fetchAssistantReply(
+            pendingMessages,
+            recommendationDecision.schemeCatalog,
+            recommendationDecision.mode,
+            recommendationDecision.usedSignals,
+            recommendationDecision.unknowns,
+          );
           if (!assistantText) throw new Error(language === "hi" ? "उत्तर खाली है" : "Empty response");
-          const matchedSchemes = findRelevantSchemes(catalogSchemes, `${userText} ${assistantText}`, 3);
           setLocalMessages((prev) => [
             ...prev,
             {
               role: "assistant",
               content: assistantText,
-              sources: matchedSchemes.length > 0 ? { matchedSchemes } : null,
+              sources: persistedRecommendation ? { recommendation: persistedRecommendation } : null,
             },
           ]);
+          setSuggestedRecommendation(
+            recommendationDecision.mode === "high_confidence" ? persistedRecommendation : null,
+          );
           setStreamingContent("");
           speakText(assistantText);
         } catch (error) {
@@ -424,15 +490,23 @@ const AIChat = () => {
         }
 
         await sendMessageMutation.mutateAsync({ sessionId: sessionId!, content: userText, role: "user" });
-        const assistantText = await fetchAssistantReply(pendingMessages, schemeCatalog);
+        const assistantText = await fetchAssistantReply(
+          pendingMessages,
+          recommendationDecision.schemeCatalog,
+          recommendationDecision.mode,
+          recommendationDecision.usedSignals,
+          recommendationDecision.unknowns,
+        );
         if (!assistantText) throw new Error(language === "hi" ? "उत्तर खाली है" : "Empty response");
-        const matchedSchemes = findRelevantSchemes(catalogSchemes, `${userText} ${assistantText}`, 3);
         await sendMessageMutation.mutateAsync({
           sessionId: sessionId!,
           content: assistantText,
           role: "assistant",
-          sources: matchedSchemes.length > 0 ? { matchedSchemes } : undefined,
+          sources: persistedRecommendation ? { recommendation: persistedRecommendation } : undefined,
         });
+        setSuggestedRecommendation(
+          recommendationDecision.mode === "high_confidence" ? persistedRecommendation : null,
+        );
         setStreamingContent("");
         speakText(assistantText);
       } catch (error) {
@@ -441,7 +515,7 @@ const AIChat = () => {
         toast.error(error instanceof Error ? error.message : language === "hi" ? "चैट विफल रही" : "Chat failed");
       }
     },
-    [activeSessionId, catalogSchemes, createSession, displayMessages, fetchAssistantReply, isBusy, language, sendMessageMutation, speakText, stopSpeaking, user],
+    [activeSessionId, catalogSchemes, createSession, displayMessages, fetchAssistantReply, isBusy, language, profile, sendMessageMutation, speakText, stopSpeaking, user],
   );
 
   const transcribeAudio = useCallback(
@@ -765,6 +839,8 @@ const AIChat = () => {
               setActiveSessionId(null);
               setLocalMessages([]);
               setStreamingContent("");
+              setSuggestedRecommendation(null);
+              setShowSuggestedRecommendation(false);
               setDraft("");
             }}
             className="flex items-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm font-medium gradient-primary text-primary-foreground mb-4"
@@ -786,6 +862,8 @@ const AIChat = () => {
                     stopVoiceCapture();
                     setActiveSessionId(session.id);
                     setStreamingContent("");
+                    setSuggestedRecommendation(null);
+                    setShowSuggestedRecommendation(false);
                   }}
                   className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-all truncate ${activeSessionId === session.id ? "bg-surface-highest text-primary" : "text-on-surface-variant hover:text-foreground hover:bg-surface-container"}`}
                 >
@@ -867,6 +945,19 @@ const AIChat = () => {
                             </div>
                             <p className="font-headline font-bold text-base mb-1">{scheme.title}</p>
                             <p className="text-sm text-on-surface-variant line-clamp-2 mb-2">{scheme.description}</p>
+                            {scheme.recommendationContext?.whyMatched?.[0] && (
+                              <p className="text-xs text-accent mb-2">{scheme.recommendationContext.whyMatched[0]}</p>
+                            )}
+                            {(scheme.recommendationContext?.usedProfile?.length ?? 0) > 0 && (
+                              <p className="text-[11px] uppercase tracking-wider text-on-surface-variant mb-2">
+                                {scheme.recommendationContext?.usedProfile.join(" • ")}
+                              </p>
+                            )}
+                            {(scheme.recommendationContext?.unknowns?.length ?? 0) > 0 && (
+                              <p className="text-[11px] text-yellow-300 mb-2">
+                                Missing: {scheme.recommendationContext?.unknowns.join(" | ")}
+                              </p>
+                            )}
                             <div className="flex items-center justify-between gap-3 text-xs">
                               <span className="text-accent font-semibold">{scheme.max_benefit || scheme.benefit_type}</span>
                               <span className="text-primary font-medium">{t("common.viewDetails")}</span>
@@ -880,6 +971,83 @@ const AIChat = () => {
               )}
             </motion.div>
           ))}
+
+          {suggestedRecommendation && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+              <div className="rounded-3xl bg-surface-container px-4 py-4 ghost-border">
+                <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-accent mb-1">Ready to shortlist</p>
+                    <p className="text-sm text-on-surface-variant">{suggestedRecommendation.summary}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSuggestedRecommendation((current) => !current)}
+                    className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
+                  >
+                    {showSuggestedRecommendation
+                      ? language === "hi"
+                        ? "Shortlist chhupayein"
+                        : "Hide shortlist"
+                      : language === "hi"
+                        ? "Show best matches"
+                        : "Show best matches"}
+                  </button>
+                </div>
+
+                {(suggestedRecommendation.usedSignals.length > 0 || suggestedRecommendation.unknowns.length > 0) && (
+                  <div className="mb-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl bg-background/30 p-3">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-on-surface-variant mb-2">Used signals</p>
+                      <p className="text-xs text-foreground">
+                        {suggestedRecommendation.usedSignals.length > 0
+                          ? suggestedRecommendation.usedSignals.join(" | ")
+                          : "Built from the conversation context."}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-background/30 p-3">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-on-surface-variant mb-2">Still unknown</p>
+                      <p className="text-xs text-yellow-300">
+                        {suggestedRecommendation.unknowns.length > 0
+                          ? suggestedRecommendation.unknowns.join(" | ")
+                          : "No major gaps right now."}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {showSuggestedRecommendation && (
+                  <div className="grid gap-3">
+                    {suggestedRecommendation.schemes.map((scheme) => (
+                      <Link
+                        key={scheme.id}
+                        to={`/schemes/${scheme.id}`}
+                        className="block rounded-2xl bg-background/40 px-4 py-4 ghost-border hover:bg-surface-high transition-colors"
+                      >
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-accent/10 text-accent">
+                            {scheme.category}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary/10 text-primary">
+                            {scheme.state}
+                          </span>
+                        </div>
+                        <p className="font-headline font-bold text-base mb-1">{scheme.title}</p>
+                        <p className="text-sm text-on-surface-variant line-clamp-2 mb-2">{scheme.description}</p>
+                        {scheme.recommendationContext?.whyMatched?.[0] && (
+                          <p className="text-xs text-accent mb-2">{scheme.recommendationContext.whyMatched[0]}</p>
+                        )}
+                        <div className="flex items-center justify-between gap-3 text-xs">
+                          <span className="text-accent font-semibold">{scheme.max_benefit || scheme.benefit_type}</span>
+                          <span className="text-primary font-medium">{t("common.viewDetails")}</span>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
 
           {streamingContent && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-6">
