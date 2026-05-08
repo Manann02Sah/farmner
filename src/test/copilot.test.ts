@@ -86,6 +86,26 @@ describe("application copilot logic", () => {
     expect(decision.schemeCatalog.length).toBeGreaterThan(0);
   });
 
+  it("prioritizes Hindi state mentions when matching schemes", () => {
+    const haryanaScheme = {
+      ...scheme,
+      id: "scheme-2",
+      title: "Canal Irrigation Support",
+      state: "Haryana",
+      description: "Irrigation support for eligible farmers in Haryana.",
+    };
+
+    const matches = findRelevantSchemes(
+      [haryanaScheme, scheme],
+      "मुझे पंजाब में योजनाएं बताओ",
+      2,
+      { profile: null },
+    );
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].state).toBe("Punjab");
+  });
+
   it("builds a dossier with scheme, eligibility, and readiness sections", () => {
     const assessment = assessSchemeEligibility(scheme, profile, {
       requiredDocs: ["Aadhaar Card", "Land Ownership Document"],

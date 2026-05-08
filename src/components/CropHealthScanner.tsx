@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Camera, CheckCircle2, Leaf, Loader2, RefreshCcw, ShieldAlert, SquareActivity } from "lucide-react";
+import { AlertTriangle, Camera, CheckCircle2, Leaf, Loader2, ScanSearch, ShieldAlert, SquareActivity } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useFarmerProfile } from "@/hooks/useFarmerProfile";
@@ -51,71 +51,70 @@ const CropHealthScanner = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraState, setCameraState] = useState<"idle" | "starting" | "live">("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<AnalysisMetrics>(defaultMetrics);
   const [summaryVisible, setSummaryVisible] = useState(false);
+  const [lastCaptureAt, setLastCaptureAt] = useState<string | null>(null);
 
   const copy = useMemo(
     () =>
       language === "hi"
         ? {
-            title: "क्रॉप हेल्थ लाइव स्कैन",
-            subtitle: "कैमरा खोलें और पत्तियों के तनाव, रोग जोखिम और सुरक्षित हिस्सों का लाइव ओवरले देखें।",
+            title: "फसल स्वास्थ्य स्कैन",
+            subtitle: "कैमरा खोलें, पौधे को फ्रेम में रखें, फिर Click Image दबाकर रिपोर्ट बनाएं।",
             openCamera: "कैमरा खोलें",
             stopCamera: "कैमरा बंद करें",
-            continue: "सारांश बनाएँ",
+            capture: "Click Image",
             restarting: "कैमरा शुरू हो रहा है...",
             unavailable: "इस ब्राउज़र में कैमरा उपलब्ध नहीं है।",
-            permission: "कृपया कैमरा अनुमति दें और फिर से प्रयास करें।",
-            summaryTitle: "तुरंत सलाह और अगला कदम",
-            summaryEmpty: "लाइव फ़ीड शुरू करें, फिर सारांश बनाने के लिए Continue दबाएँ।",
-            matchedSchemes: "उपयुक्त योजनाएँ",
-            noSchemes: "अभी कोई स्पष्ट योजना मैच नहीं मिला।",
-            overlayHint: "लाइव स्टेटस / Live status",
+            permission: "कृपया कैमरा अनुमति दें और फिर प्रयास करें।",
+            summaryTitle: "फसल रिपोर्ट और अगले कदम",
+            summaryEmpty: "पहले कैमरा खोलें, फिर Click Image दबाकर रिपोर्ट बनाएं।",
+            matchedSchemes: "उपयुक्त योजनाएं",
+            noSchemes: "अभी कोई साफ योजना मैच नहीं मिला।",
+            overlayHint: "रिपोर्ट केवल फोटो क्लिक करने के बाद अपडेट होगी।",
             safe: "सुरक्षित",
             warning: "जोखिम",
             disease: "रोगग्रस्त",
             hydration: "नमी स्कोर",
             pestRisk: "रोग/कीट जोखिम",
             leafCoverage: "लीफ कवरेज",
-            live: "लाइव विश्लेषण",
+            statusCard: "अंतिम स्कैन",
             openDetails: "विवरण खोलें",
+            capturePrompt: "रिपोर्ट बनाने के लिए पत्तियों पर कैमरा फोकस करें और फोटो लें।",
+            capturedAt: "अंतिम फोटो",
           }
         : {
-            title: "Crop Health Live Scan",
-            subtitle: "Open the camera and see a live overlay for healthy leaf zones, warning areas, and disease risk.",
+            title: "Crop Health Scan",
+            subtitle: "Open the camera, frame the plant clearly, then press Click Image to generate the report.",
             openCamera: "Open Camera",
             stopCamera: "Stop Camera",
-            continue: "Generate Summary",
+            capture: "Click Image",
             restarting: "Starting camera...",
             unavailable: "Camera is not available in this browser.",
             permission: "Please allow camera access and try again.",
-            summaryTitle: "Instant advice and next steps",
-            summaryEmpty: "Start the live feed, then press Continue to generate a summary.",
+            summaryTitle: "Crop report and next steps",
+            summaryEmpty: "Open the camera, then press Click Image to generate the report.",
             matchedSchemes: "Relevant schemes",
             noSchemes: "No clear scheme match yet.",
-            overlayHint: "Live status / लाइव स्टेटस",
+            overlayHint: "The report updates only after you click an image.",
             safe: "Safe",
             warning: "At Risk",
             disease: "Diseased",
             hydration: "Hydration score",
             pestRisk: "Disease/pest risk",
             leafCoverage: "Leaf coverage",
-            live: "Live analysis",
+            statusCard: "Latest scan",
             openDetails: "Open details",
+            capturePrompt: "Point the camera at the leaves and take a photo to generate the report.",
+            capturedAt: "Last image",
           },
     [language],
   );
 
   const stopCamera = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
 
@@ -148,23 +147,17 @@ const CropHealthScanner = () => {
   const drawOverlay = (nextMetrics: AnalysisMetrics) => {
     const video = videoRef.current;
     const canvas = overlayRef.current;
-    if (!video || !canvas) {
-      return;
-    }
+    if (!video || !canvas) return;
 
     const width = video.clientWidth;
     const height = video.clientHeight;
-    if (!width || !height) {
-      return;
-    }
+    if (!width || !height) return;
 
     canvas.width = width;
     canvas.height = height;
 
     const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
+    if (!context) return;
 
     context.clearRect(0, 0, width, height);
     context.lineWidth = 2;
@@ -183,7 +176,7 @@ const CropHealthScanner = () => {
     });
   };
 
-  const classifyFrame = () => {
+  const captureAndAnalyze = () => {
     const video = videoRef.current;
     const canvas = analysisCanvasRef.current;
     if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) {
@@ -193,9 +186,7 @@ const CropHealthScanner = () => {
     canvas.width = ANALYSIS_WIDTH;
     canvas.height = ANALYSIS_HEIGHT;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) {
-      return;
-    }
+    if (!context) return;
 
     context.drawImage(video, 0, 0, ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
     const imageData = context.getImageData(0, 0, ANALYSIS_WIDTH, ANALYSIS_HEIGHT);
@@ -225,9 +216,7 @@ const CropHealthScanner = () => {
             const brightness = (red + green + blue) / 3;
             const isLeaf = green > 50 && green >= red * 0.75 && green >= blue * 0.8;
 
-            if (!isLeaf) {
-              continue;
-            }
+            if (!isLeaf) continue;
 
             leafCount += 1;
             totalLeafPixels += 1;
@@ -249,9 +238,7 @@ const CropHealthScanner = () => {
           }
         }
 
-        if (leafCount < 20) {
-          continue;
-        }
+        if (leafCount < 20) continue;
 
         const dominantStatus: ZoneStatus =
           diseaseCount / leafCount > 0.28
@@ -289,11 +276,8 @@ const CropHealthScanner = () => {
 
     setMetrics(nextMetrics);
     drawOverlay(nextMetrics);
-  };
-
-  const loopAnalysis = () => {
-    classifyFrame();
-    animationFrameRef.current = requestAnimationFrame(loopAnalysis);
+    setSummaryVisible(true);
+    setLastCaptureAt(new Date().toLocaleTimeString(language === "hi" ? "hi-IN" : "en-IN"));
   };
 
   const startCamera = async () => {
@@ -303,7 +287,6 @@ const CropHealthScanner = () => {
     }
 
     setCameraError(null);
-    setSummaryVisible(false);
     setCameraState("starting");
 
     try {
@@ -323,7 +306,6 @@ const CropHealthScanner = () => {
       }
 
       setCameraState("live");
-      animationFrameRef.current = requestAnimationFrame(loopAnalysis);
     } catch (error) {
       console.error("crop scanner camera error:", error);
       setCameraState("idle");
@@ -338,8 +320,8 @@ const CropHealthScanner = () => {
     if (metrics.diseasePct >= 25) {
       recommendations.push(
         language === "hi"
-          ? "लाल हिस्से अधिक हैं। प्रभावित पत्तियाँ अलग करें, फफूंदनाशी या उचित कीटनाशी पर कृषि विशेषज्ञ से सलाह लें, और ऊपर से पानी देने से बचें।"
-          : "Red zones are elevated. Isolate affected leaves, consult a local expert on fungicide or pesticide use, and avoid overhead watering."
+          ? "लाल हिस्से ज्यादा हैं। प्रभावित पत्तियों को अलग करें, स्थानीय कृषि विशेषज्ञ से सलाह लें, और ऊपर से पानी देने से बचें।"
+          : "Red zones are elevated. Isolate affected leaves, consult a local expert, and avoid overhead watering.",
       );
       schemeQuery.push("crop protection pest management agriculture subsidy");
     }
@@ -347,8 +329,8 @@ const CropHealthScanner = () => {
     if (metrics.warningPct >= 25) {
       recommendations.push(
         language === "hi"
-          ? "पीले हिस्से तनाव दिखा रहे हैं। मिट्टी की नमी जाँचें, सिंचाई का अंतराल संतुलित करें, और नाइट्रोजन/पोटाश आधारित पोषण की समीक्षा करें।"
-          : "Yellow zones show stress. Check soil moisture, rebalance irrigation timing, and review nitrogen/potash nutrition."
+          ? "पीले हिस्से तनाव दिखा रहे हैं। मिट्टी की नमी जांचें, सिंचाई का अंतराल संतुलित करें, और पोषण प्रबंधन पर ध्यान दें।"
+          : "Yellow zones show stress. Check soil moisture, rebalance irrigation timing, and review plant nutrition.",
       );
       schemeQuery.push("micro irrigation soil health water support farmer scheme");
     }
@@ -356,24 +338,24 @@ const CropHealthScanner = () => {
     if (metrics.safePct >= 60) {
       recommendations.push(
         language === "hi"
-          ? "हरी कवरेज अच्छी है। नियमित निरीक्षण, संतुलित पानी, और कीट निगरानी जारी रखें।"
-          : "Green coverage is strong. Continue regular inspection, balanced watering, and pest monitoring."
+          ? "हरी कवरेज अच्छी है। नियमित निरीक्षण, संतुलित पानी और कीट निगरानी जारी रखें।"
+          : "Green coverage is strong. Continue regular inspection, balanced watering, and pest monitoring.",
       );
     }
 
     if (metrics.leafCoveragePct < 20) {
       recommendations.push(
         language === "hi"
-          ? "कैमरे में पत्ती कवरेज कम दिख रही है। पत्तियों के करीब जाएँ और अगली जाँच में बेहतर रोशनी रखें।"
-          : "Leaf coverage in the frame is low. Move closer to the crop canopy and use better lighting on the next scan."
+          ? "फ्रेम में पत्तियां कम दिख रही हैं। अगली फोटो में पत्तियों के पास जाएं और रोशनी बेहतर रखें।"
+          : "Leaf coverage in the frame is low. Move closer to the crop canopy and use better lighting on the next image.",
       );
     }
 
     if (recommendations.length === 0) {
       recommendations.push(
         language === "hi"
-          ? "अभी पर्याप्त तनाव संकेत नहीं दिखे। फिर भी मिट्टी की नमी, पत्तियों की सतह, और कीट गतिविधि की नियमित जाँच जारी रखें।"
-          : "No major stress signal is visible right now, but keep checking moisture, leaf surfaces, and pest activity regularly."
+          ? "अभी बड़ा तनाव संकेत नहीं दिखा, फिर भी नमी, पत्तियों की सतह और कीट गतिविधि की नियमित जांच जारी रखें।"
+          : "No major stress signal is visible right now, but keep checking moisture, leaf surfaces, and pest activity regularly.",
       );
     }
 
@@ -392,19 +374,19 @@ const CropHealthScanner = () => {
 
   const statCards = [
     {
-      label: `${copy.safe} / Safe`,
+      label: copy.safe,
       value: `${metrics.safePct}%`,
       color: "bg-green-500/15 text-green-400 border-green-500/30",
       icon: <CheckCircle2 className="w-4 h-4" />,
     },
     {
-      label: `${copy.warning} / Warning`,
+      label: copy.warning,
       value: `${metrics.warningPct}%`,
       color: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
       icon: <AlertTriangle className="w-4 h-4" />,
     },
     {
-      label: `${copy.disease} / Diseased`,
+      label: copy.disease,
       value: `${metrics.diseasePct}%`,
       color: "bg-red-500/15 text-red-400 border-red-500/30",
       icon: <ShieldAlert className="w-4 h-4" />,
@@ -413,52 +395,53 @@ const CropHealthScanner = () => {
 
   return (
     <section className="bg-surface-container rounded-3xl p-6 md:p-8 ghost-border">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-6">
+      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Leaf className="w-5 h-5 text-primary" />
-            <h2 className="font-headline font-bold text-2xl">{copy.title}</h2>
+          <div className="mb-2 flex items-center gap-2">
+            <Leaf className="h-5 w-5 text-primary" />
+            <h2 className="font-headline text-2xl font-bold">{copy.title}</h2>
           </div>
-          <p className="text-sm text-on-surface-variant max-w-3xl">{copy.subtitle}</p>
+          <p className="max-w-3xl text-sm text-on-surface-variant">{copy.subtitle}</p>
         </div>
 
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
             onClick={cameraState === "live" ? stopCamera : () => void startCamera()}
-            className="gradient-primary text-primary-foreground font-headline font-bold px-5 py-3 rounded-xl inline-flex items-center gap-2"
+            className="gradient-primary inline-flex items-center gap-2 rounded-xl px-5 py-3 font-headline font-bold text-primary-foreground"
           >
-            {cameraState === "starting" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+            {cameraState === "starting" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
             {cameraState === "live" ? copy.stopCamera : cameraState === "starting" ? copy.restarting : copy.openCamera}
           </button>
 
           <button
             type="button"
-            onClick={() => setSummaryVisible(true)}
-            className="ghost-border px-5 py-3 rounded-xl text-sm font-medium text-on-surface-variant hover:text-foreground inline-flex items-center gap-2"
+            onClick={captureAndAnalyze}
+            disabled={cameraState !== "live"}
+            className="ghost-border inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <RefreshCcw className="w-4 h-4" />
-            {copy.continue}
+            <ScanSearch className="h-4 w-4" />
+            {copy.capture}
           </button>
         </div>
       </div>
 
-      <div className="grid xl:grid-cols-[1.2fr_0.8fr] gap-6">
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">
-          <div className="relative rounded-3xl overflow-hidden bg-surface-high min-h-[24rem]">
-            <video ref={videoRef} className="w-full h-full min-h-[24rem] object-cover" muted playsInline />
-            <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+          <div className="relative min-h-[24rem] overflow-hidden rounded-3xl bg-surface-high">
+            <video ref={videoRef} className="h-full min-h-[24rem] w-full object-cover" muted playsInline />
+            <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full" />
             <canvas ref={analysisCanvasRef} className="hidden" />
 
-            <div className="absolute top-4 left-4 right-4 flex flex-wrap gap-3">
+            <div className="absolute left-4 right-4 top-4 flex flex-wrap gap-3">
               <div className="rounded-2xl bg-black/55 px-4 py-3 text-white backdrop-blur">
-                <p className="text-[11px] uppercase tracking-wider text-white/70 mb-1">{copy.live}</p>
-                <p className="text-sm font-medium">{copy.overlayHint}</p>
+                <p className="mb-1 text-[11px] uppercase tracking-wider text-white/70">{copy.statusCard}</p>
+                <p className="text-sm font-medium">{lastCaptureAt ? `${copy.capturedAt}: ${lastCaptureAt}` : copy.overlayHint}</p>
               </div>
 
               {statCards.map((card) => (
                 <div key={card.label} className={`rounded-2xl border px-4 py-3 backdrop-blur ${card.color}`}>
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="mb-1 flex items-center gap-2">
                     {card.icon}
                     <span className="text-[11px] uppercase tracking-wider">{card.label}</span>
                   </div>
@@ -468,38 +451,34 @@ const CropHealthScanner = () => {
             </div>
 
             {cameraState !== "live" && (
-              <div className="absolute inset-0 flex items-center justify-center text-center p-6 bg-surface-high">
+              <div className="absolute inset-0 flex items-center justify-center bg-surface-high p-6 text-center">
                 <div>
-                  <SquareActivity className="w-12 h-12 text-primary mx-auto mb-3" />
-                  <p className="font-medium mb-2">
-                    {cameraState === "starting" ? copy.restarting : copy.openCamera}
-                  </p>
-                  <p className="text-sm text-on-surface-variant max-w-md">
-                    {cameraError || copy.summaryEmpty}
-                  </p>
+                  <SquareActivity className="mx-auto mb-3 h-12 w-12 text-primary" />
+                  <p className="mb-2 font-medium">{cameraState === "starting" ? copy.restarting : copy.openCamera}</p>
+                  <p className="max-w-md text-sm text-on-surface-variant">{cameraError || copy.capturePrompt}</p>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="rounded-2xl bg-surface-high p-4">
-              <p className="text-xs text-on-surface-variant mb-1">{copy.hydration}</p>
-              <p className="text-2xl font-headline font-bold">{metrics.hydrationScore}%</p>
+              <p className="mb-1 text-xs text-on-surface-variant">{copy.hydration}</p>
+              <p className="font-headline text-2xl font-bold">{metrics.hydrationScore}%</p>
             </div>
             <div className="rounded-2xl bg-surface-high p-4">
-              <p className="text-xs text-on-surface-variant mb-1">{copy.pestRisk}</p>
-              <p className="text-2xl font-headline font-bold">{metrics.pestRiskScore}%</p>
+              <p className="mb-1 text-xs text-on-surface-variant">{copy.pestRisk}</p>
+              <p className="font-headline text-2xl font-bold">{metrics.pestRiskScore}%</p>
             </div>
             <div className="rounded-2xl bg-surface-high p-4">
-              <p className="text-xs text-on-surface-variant mb-1">{copy.leafCoverage}</p>
-              <p className="text-2xl font-headline font-bold">{metrics.leafCoveragePct}%</p>
+              <p className="mb-1 text-xs text-on-surface-variant">{copy.leafCoverage}</p>
+              <p className="font-headline text-2xl font-bold">{metrics.leafCoveragePct}%</p>
             </div>
           </div>
         </div>
 
         <div className="rounded-3xl bg-surface-high p-5">
-          <h3 className="font-headline font-bold text-xl mb-4">{copy.summaryTitle}</h3>
+          <h3 className="mb-4 font-headline text-xl font-bold">{copy.summaryTitle}</h3>
 
           {summaryVisible ? (
             <div className="space-y-4">
@@ -512,29 +491,29 @@ const CropHealthScanner = () => {
               </div>
 
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-on-surface-variant mb-3">{copy.matchedSchemes}</p>
+                <p className="mb-3 text-[11px] uppercase tracking-wider text-on-surface-variant">{copy.matchedSchemes}</p>
                 {summary.matchedSchemes.length > 0 ? (
                   <div className="space-y-3">
                     {summary.matchedSchemes.map((scheme) => (
                       <Link
                         key={scheme.id}
                         to={`/schemes/${scheme.id}`}
-                        className="block rounded-2xl bg-background/40 p-4 ghost-border hover:bg-background/60 transition-colors"
+                        className="ghost-border block rounded-2xl bg-background/40 p-4 transition-colors hover:bg-background/60"
                       >
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-accent/10 text-accent">
+                        <div className="mb-2 flex flex-wrap gap-2">
+                          <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
                             {scheme.category}
                           </span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary/10 text-primary">
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary">
                             {scheme.state}
                           </span>
                         </div>
-                        <p className="font-headline font-bold text-base mb-1">{scheme.title}</p>
-                        <p className="text-sm text-on-surface-variant line-clamp-2 mb-2">{scheme.description}</p>
+                        <p className="mb-1 font-headline text-base font-bold">{scheme.title}</p>
+                        <p className="mb-2 line-clamp-2 text-sm text-on-surface-variant">{scheme.description}</p>
                         {scheme.recommendationContext?.whyMatched?.[0] && (
-                          <p className="text-xs text-accent mb-2">{scheme.recommendationContext.whyMatched[0]}</p>
+                          <p className="mb-2 text-xs text-accent">{scheme.recommendationContext.whyMatched[0]}</p>
                         )}
-                        <span className="text-sm text-primary font-medium">{copy.openDetails}</span>
+                        <span className="text-sm font-medium text-primary">{copy.openDetails}</span>
                       </Link>
                     ))}
                   </div>

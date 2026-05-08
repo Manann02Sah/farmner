@@ -21,6 +21,8 @@ export interface SchemeRow {
 }
 
 const MINIMUM_SCHEME_CATALOG_SIZE = 200;
+const ALL_CATEGORIES_FILTER = "ALL_CATEGORIES";
+const ALL_STATES_FILTER = "ALL_STATES";
 
 function normalizeSchemeRow(scheme: SchemeRow): SchemeRow {
   return {
@@ -44,17 +46,30 @@ function applySchemeFilters(
   },
 ) {
   const normalizedSearch = filters?.search?.trim().toLowerCase();
+  const normalizedCategory = filters?.category?.trim();
+  const normalizedState = filters?.state?.trim();
+  const normalizedBenefitType = filters?.benefitType?.trim();
 
   return schemes.filter((scheme) => {
-    if (filters?.category && filters.category !== "All Categories" && scheme.category !== filters.category) {
+    if (
+      normalizedCategory &&
+      normalizedCategory !== "All Categories" &&
+      normalizedCategory !== ALL_CATEGORIES_FILTER &&
+      scheme.category !== normalizedCategory
+    ) {
       return false;
     }
 
-    if (filters?.state && filters.state !== "All States" && scheme.state !== filters.state) {
+    if (
+      normalizedState &&
+      normalizedState !== "All States" &&
+      normalizedState !== ALL_STATES_FILTER &&
+      scheme.state !== normalizedState
+    ) {
       return false;
     }
 
-    if (filters?.benefitType && scheme.benefit_type !== filters.benefitType) {
+    if (normalizedBenefitType && scheme.benefit_type !== normalizedBenefitType) {
       return false;
     }
 
@@ -119,10 +134,18 @@ export function useSchemes(filters?: {
           .eq("status", "active")
           .order("title");
 
-        if (filters?.category && filters.category !== "All Categories") {
+        if (
+          filters?.category &&
+          filters.category !== "All Categories" &&
+          filters.category !== ALL_CATEGORIES_FILTER
+        ) {
           query = query.eq("category", filters.category);
         }
-        if (filters?.state && filters.state !== "All States") {
+        if (
+          filters?.state &&
+          filters.state !== "All States" &&
+          filters.state !== ALL_STATES_FILTER
+        ) {
           query = query.eq("state", filters.state);
         }
         if (filters?.benefitType) {
@@ -134,7 +157,9 @@ export function useSchemes(filters?: {
 
         const { data, error } = await query;
         if (error) throw error;
-        return mergeWithFallbackSchemes((data as SchemeRow[]) ?? []);
+        return applySchemeFilters(mergeWithFallbackSchemes((data as SchemeRow[]) ?? []), filters).sort((a, b) =>
+          a.title.localeCompare(b.title),
+        );
       } catch (error) {
         console.warn("Falling back to local scheme catalog because Supabase schemes query failed.", error);
         return applySchemeFilters(getLocalSchemeCatalog().map(normalizeSchemeRow), filters).sort((a, b) =>
