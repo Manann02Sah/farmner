@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { fetchWithGeminiKeyRotation, getGeminiApiKeys, getGeminiKeyError } from "../_shared/gemini.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -101,9 +102,8 @@ serve(async (req) => {
   }
 
   try {
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
-      throw createHttpError("GEMINI_API_KEY is not configured in Supabase secrets.", 503);
+    if (getGeminiApiKeys().length === 0) {
+      throw createHttpError(getGeminiKeyError(), 503);
     }
     const contentType = req.headers.get("content-type")?.toLowerCase() ?? "";
 
@@ -204,34 +204,36 @@ Use the uploaded file content itself, not the file name.
 If the visible language does not match the requested source language, mention that in warnings but still translate what is visible.
 Keep the translated output readable and structured for a user who wants the document text in ${targetLanguageName}.`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: `${systemPrompt}\n\n${translationPrompt}` },
-                {
-                  inline_data: {
-                    mime_type: fileMimeType,
-                    data: fileBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
+    const response = await fetchWithGeminiKeyRotation((apiKey) =>
+      fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-        }),
-      },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: `${systemPrompt}\n\n${translationPrompt}` },
+                  {
+                    inline_data: {
+                      mime_type: fileMimeType,
+                      data: fileBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+      ),
     );
 
     if (!response.ok) {

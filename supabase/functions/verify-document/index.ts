@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { fetchWithGeminiKeyRotation, getGeminiApiKeys, getGeminiKeyError } from "../_shared/gemini.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -122,11 +123,10 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     const contentType = req.headers.get("content-type")?.toLowerCase() ?? "";
 
-    if (!GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not configured. Set it in Supabase secrets.");
+    if (getGeminiApiKeys().length === 0) {
+      throw new Error(getGeminiKeyError());
     }
 
     let documentType = "";
@@ -260,34 +260,36 @@ Rules:
 
 Respond only in ${lang}.`;
 
-    const aiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: `${systemPrompt}\n\n${analysisPrompt}` },
-                {
-                  inline_data: {
-                    mime_type: fileMimeType,
-                    data: fileBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
+    const aiResponse = await fetchWithGeminiKeyRotation((apiKey) =>
+      fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-        }),
-      },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: `${systemPrompt}\n\n${analysisPrompt}` },
+                  {
+                    inline_data: {
+                      mime_type: fileMimeType,
+                      data: fileBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+      ),
     );
 
     if (!aiResponse.ok) {

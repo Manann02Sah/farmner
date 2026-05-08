@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { getGeminiApiKeys, getGeminiKeyError } from "../_shared/gemini.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,18 +120,18 @@ function extractGeminiTranscript(data: Record<string, unknown>) {
 }
 
 async function requestGeminiTranscription(
-  apiKey: string | null,
+  apiKeys: string[],
   prompt: string,
   file: File,
   mimeType: string,
   language: "hi" | "en",
 ) {
-  if (!apiKey) {
+  if (apiKeys.length === 0) {
     return {
       ok: false as const,
       failure: {
         status: 503,
-        message: "GEMINI_API_KEY is not configured",
+        message: getGeminiKeyError(),
         provider: "gemini" as const,
       },
     };
@@ -138,72 +139,85 @@ async function requestGeminiTranscription(
 
   const buffer = await file.arrayBuffer();
   const audioBase64 = arrayBufferToBase64(buffer);
+  let lastFailure: ProviderFailure = {
+    status: 500,
+    message: "Audio transcription failed",
+    provider: "gemini",
+  };
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: audioBase64,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0,
+  for (const apiKey of apiKeys) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      }),
-    },
-  );
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: audioBase64,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+          },
+        }),
+      },
+    );
 
-  if (!response.ok) {
+    if (response.ok) {
+      const result = await response.json();
+      const transcript = extractGeminiTranscript(result);
+      if (!transcript) {
+        return {
+          ok: false as const,
+          failure: {
+            status: 422,
+            message: getNoSpeechMessage(language),
+            provider: "gemini" as const,
+          },
+        };
+      }
+
+      return { ok: true as const, text: transcript };
+    }
+
     let errorMessage = "Audio transcription failed";
     if (response.status === 429) errorMessage = "Rate limit exceeded. Please try again shortly.";
     else if (response.status === 413) errorMessage = "Recording too large. Please try a shorter clip.";
     else if (response.status === 415) errorMessage = "Unsupported audio format.";
     else if (response.status === 401 || response.status === 403) {
-      errorMessage = "Transcription service is not authorized. Check GEMINI_API_KEY and its API restrictions";
+      errorMessage = "Transcription service is not authorized. Check Gemini key restrictions";
     } else if (response.status === 400) {
       errorMessage = "Transcription request was rejected by Gemini";
     }
 
     const detailedMessage = await getGeminiErrorMessage(response, errorMessage);
-    return {
-      ok: false as const,
-      failure: {
-        status: response.status >= 400 && response.status < 600 ? response.status : 500,
-        message: detailedMessage,
-        provider: "gemini" as const,
-      },
+    lastFailure = {
+      status: response.status >= 400 && response.status < 600 ? response.status : 500,
+      message: detailedMessage,
+      provider: "gemini" as const,
     };
+
+    if (!shouldFallbackToOpenAI(lastFailure.status)) {
+      break;
+    }
   }
 
-  const result = await response.json();
-  const transcript = extractGeminiTranscript(result);
-  if (!transcript) {
-    return {
-      ok: false as const,
-      failure: {
-        status: 422,
-        message: getNoSpeechMessage(language),
-        provider: "gemini" as const,
-      },
-    };
-  }
-
-  return { ok: true as const, text: transcript };
+  return {
+    ok: false as const,
+    failure: lastFailure,
+  };
 }
 
 async function requestOpenAITranscription(
@@ -281,7 +295,7 @@ serve(async (req) => {
   }
 
   try {
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const GEMINI_API_KEYS = getGeminiApiKeys();
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 
     const formData = await req.formData();
@@ -308,7 +322,7 @@ serve(async (req) => {
     });
 
     const geminiResult = await requestGeminiTranscription(
-      GEMINI_API_KEY,
+      GEMINI_API_KEYS,
       prompt,
       normalizedFile,
       mimeType,
