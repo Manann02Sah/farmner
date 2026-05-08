@@ -1,5 +1,6 @@
 import { SchemeRow } from "@/hooks/useSchemes";
 import { FarmerProfile, RecommendationContext } from "@/lib/copilotTypes";
+import { expandSchemeSearchText, extractCanonicalStates, isNationalScopeState, normalizeIndianText } from "@/lib/schemeLanguage";
 
 const STOP_WORDS = new Set([
   "a",
@@ -46,11 +47,11 @@ export interface MatchedScheme {
 }
 
 function normalizeText(text: string) {
-  return text.toLowerCase().replace(/[^a-z0-9\u0900-\u097f\s]/gi, " ").replace(/\s+/g, " ").trim();
+  return normalizeIndianText(text);
 }
 
 function tokenize(text: string) {
-  return normalizeText(text)
+  return expandSchemeSearchText(text)
     .split(" ")
     .map((token) => token.trim())
     .filter((token) => token.length >= 2 && !STOP_WORDS.has(token));
@@ -95,9 +96,10 @@ export function findRelevantSchemes(
   limit = 3,
   options?: { profile?: Partial<FarmerProfile> | null },
 ) {
-  const normalizedInput = normalizeText(input);
+  const normalizedInput = expandSchemeSearchText(input);
   const tokens = tokenize(input);
   const profile = options?.profile;
+  const requestedStates = extractCanonicalStates(input);
 
   if (!normalizedInput || tokens.length === 0) {
     return [] as MatchedScheme[];
@@ -140,6 +142,18 @@ export function findRelevantSchemes(
         whyMatched.push(`Scheme state matches ${scheme.state}.`);
       }
 
+      if (requestedStates.length > 0) {
+        if (requestedStates.includes(scheme.state) || isNationalScopeState(scheme.state)) {
+          score += requestedStates.includes(scheme.state) ? 12 : 2;
+          if (requestedStates.includes(scheme.state)) {
+            whyMatched.push(`Scheme state matches ${scheme.state}.`);
+          }
+        } else {
+          score -= 10;
+          risks.push(`Requested state does not match scheme state ${scheme.state}.`);
+        }
+      }
+
       if (normalizedInput.includes(normalizeText(scheme.benefit_type))) {
         score += 3;
         whyMatched.push(`Benefit type matches ${scheme.benefit_type}.`);
@@ -151,7 +165,7 @@ export function findRelevantSchemes(
         score += 5;
         usedProfile.push(`State: ${profile.state}`);
         whyMatched.push("Your saved state aligns with the scheme state.");
-      } else if (scheme.state !== "All States" && scheme.state !== "National" && scheme.state !== "India") {
+      } else if (!isNationalScopeState(scheme.state)) {
         risks.push(`Profile state ${profile.state} does not match scheme state ${scheme.state}.`);
       }
 

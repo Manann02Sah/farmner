@@ -1,5 +1,6 @@
 import { formatProfileSignals } from "@/lib/copilot";
 import { FarmerProfile } from "@/lib/copilotTypes";
+import { expandSchemeSearchText, extractCanonicalStates, normalizeIndianText } from "@/lib/schemeLanguage";
 import { MatchedScheme } from "@/lib/schemeMatching";
 
 type ChatRole = "user" | "assistant";
@@ -63,18 +64,29 @@ const CROP_KEYWORDS = [
   "dairy",
   "livestock",
   "crop",
+  "गेहूं",
+  "धान",
+  "मक्का",
+  "कपास",
+  "सरसों",
+  "गन्ना",
+  "सोयाबीन",
+  "बाजरा",
+  "फसल",
+  "बागवानी",
 ];
 
-const BUSINESS_KEYWORDS = ["startup", "business", "enterprise", "shop", "manufacturer", "msme", "entrepreneur"];
-const FARMING_KEYWORDS = ["farmer", "farming", "agriculture", "cultivation", "irrigation", "kisan"];
+const BUSINESS_KEYWORDS = ["startup", "business", "enterprise", "shop", "manufacturer", "msme", "entrepreneur", "व्यवसाय", "उद्यम", "स्टार्टअप"];
+const FARMING_KEYWORDS = ["farmer", "farming", "agriculture", "cultivation", "irrigation", "kisan", "किसान", "खेती", "सिंचाई"];
 
 const normalizeText = (value: string) =>
-  value.toLowerCase().replace(/[^a-z0-9\u0900-\u097f\s]/gi, " ").replace(/\s+/g, " ").trim();
+  normalizeIndianText(value);
 
 const unique = (items: string[]) => [...new Set(items.filter(Boolean))];
 
 function includesAny(text: string, items: string[]) {
-  return items.some((item) => text.includes(normalizeText(item)));
+  const expandedText = expandSchemeSearchText(text);
+  return items.some((item) => expandedText.includes(expandSchemeSearchText(item)));
 }
 
 function getTopScoreGap(matches: MatchedScheme[]) {
@@ -95,8 +107,10 @@ function buildConversationSignals(
   profile?: Partial<FarmerProfile> | null,
 ) {
   const normalizedConversation = normalizeText(conversationText);
+  const expandedConversation = expandSchemeSearchText(conversationText);
   const usedSignals = formatProfileSignals(profile ?? {});
   const unknowns: string[] = [];
+  const canonicalStates = extractCanonicalStates(conversationText);
 
   const states = unique(
     availableSchemes
@@ -105,10 +119,14 @@ function buildConversationSignals(
   );
 
   for (const state of states) {
-    if (normalizedConversation.includes(normalizeText(state))) {
+    if (expandedConversation.includes(normalizeText(state))) {
       usedSignals.push(`Conversation state: ${state}`);
       break;
     }
+  }
+
+  if (canonicalStates.length > 0) {
+    usedSignals.push(`Conversation state: ${canonicalStates[0]}`);
   }
 
   const landMatch = conversationText.match(/\b\d+(?:\.\d+)?\s*(?:acre|acres|hectare|hectares)\b/i);
